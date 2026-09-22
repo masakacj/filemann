@@ -31,7 +31,7 @@ struct MediaLibraryView: View {
                         ContentUnavailableView {
                             Label("媒体库为空", systemImage: "photo.on.rectangle")
                         } description: {
-                            Text("从 FileMann 内选择相册图片/视频导入。默认可在导入校验后请求清理相册原件。")
+                            Text("可从 FileMann 内导入相册，也可以用分享菜单中的“保存到 FileMann”快捷指令写入 Inbox。")
                         }
 
                         Button {
@@ -56,11 +56,15 @@ struct MediaLibraryView: View {
                     ProgressView("读取媒体库…")
                 }
 
-                if viewModel.isImportingPhotos {
+                if viewModel.isImportingPhotos || viewModel.isImportingInbox {
                     VStack(spacing: 10) {
                         ProgressView()
-                        Text(viewModel.photoImportProgress)
-                            .font(.subheadline)
+                        Text(
+                            viewModel.isImportingPhotos
+                            ? viewModel.photoImportProgress
+                            : viewModel.inboxImportProgress
+                        )
+                        .font(.subheadline)
                     }
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
@@ -98,6 +102,12 @@ struct MediaLibraryView: View {
                             )
 
                             Button {
+                                viewModel.importInboxAndRefresh()
+                            } label: {
+                                Label("扫描快捷指令 Inbox", systemImage: "tray.and.arrow.down")
+                            }
+
+                            Button {
                                 viewModel.refresh(force: true)
                             } label: {
                                 Label("刷新媒体库", systemImage: "arrow.clockwise")
@@ -128,11 +138,11 @@ struct MediaLibraryView: View {
             }
         }
         .onAppear {
-            viewModel.refresh()
+            viewModel.importInboxAndRefresh(showStatus: true)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                viewModel.refresh()
+                viewModel.importInboxAndRefresh(showStatus: true)
             }
         }
         .sheet(isPresented: $showPhotoPicker) {

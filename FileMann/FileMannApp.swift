@@ -8,6 +8,9 @@ struct FileMannApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .onAppear {
+                    _ = try? FileMannShared.inboxDirectory()
+                }
         }
     }
 }

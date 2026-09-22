@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 enum MediaImportSource: String, Codable, Hashable, Sendable {
     case share
     case photoPicker
+    case shortcut
 }
 
 struct MediaImportMetadata: Codable, Hashable, Sendable {
@@ -45,6 +46,21 @@ enum FileMannShared {
             withIntermediateDirectories: true
         )
         return root
+    }
+
+    static func inboxDirectory() throws -> URL {
+        let documents = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let inbox = documents.appendingPathComponent("Inbox", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: inbox,
+            withIntermediateDirectories: true
+        )
+        return inbox
     }
 
     static func mediaDirectory() throws -> URL {
@@ -165,6 +181,15 @@ enum FileMannShared {
             }
             index += 1
         }
+    }
+
+    static func isSupportedMediaFile(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else {
+            return false
+        }
+        return type.conforms(to: .image)
+            || type.conforms(to: .movie)
+            || type.conforms(to: .video)
     }
 
     static func noteLibraryChanged() {

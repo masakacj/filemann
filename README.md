@@ -4,23 +4,61 @@ FileMann EasySign 版：iOS 本地媒体库 + SMB/NAS 归档工具。
 
 ## EasySign 签名目标
 
-这版专门适配当前 mobileprovision：
+当前 Bundle ID：
 
 ```
-Bundle ID: tg.unitgqq2709.tool1
+tg.unitgqq2709.tool1
 ```
 
-IPA 只包含一个主 App，不再包含 Share Extension，也不请求 App Group entitlement。
+IPA 只包含主 App，不包含 Share Extension，也不依赖 App Group。
 
-轻松签中：
+## 快捷指令分享方案
 
-1. 导入 `FileMann-unsigned.ipa`
-2. 选择你的 p12
-3. 选择对应的 mobileprovision
-4. 不额外修改 Bundle ID
-5. 签名并安装
+FileMann 会创建并公开：
 
-## 相册导入
+```
+我的 iPhone
+└─ FileMann
+   └─ Inbox
+```
+
+这是快捷指令与 FileMann 之间的中转目录。
+
+推荐创建一个名为：
+
+```
+保存到 FileMann
+```
+
+的快捷指令，并开启“在共享表单中显示”。
+
+快捷指令步骤：
+
+1. 接收共享表单中的“图像”和“媒体”。
+2. “存储文件”：输入使用“快捷指令输入”，目标固定到“我的 iPhone / FileMann / Inbox”，关闭“询问存储位置”。
+3. “打开 URL”：`filemann://inbox`。也可以改成“打开 App → FileMann”。
+4. 第一轮测试先不要加“删除照片”。
+
+操作：
+
+```
+相册多选
+→ 分享
+→ 保存到 FileMann
+→ 文件写入 Inbox
+→ 自动打开 FileMann
+→ FileMann 自动接管 Inbox
+→ 移入私有媒体库
+→ Inbox 清空
+```
+
+FileMann 每次启动、回到前台，都会自动扫描 Inbox。
+
+Inbox 中图片/视频会被移动到 FileMann 的私有 Application Support 媒体库。移动后会再次检查文件字节大小，只有大小一致才记为成功导入。非图片/视频文件不会被删除，会留在 Inbox。
+
+第一轮验证成功后，可以在快捷指令的“存储文件”动作之后加入“删除照片”，让 iOS 对共享输入执行照片删除。建议先用 1 张图片和 1 个短视频测试完整流程，再开启删除。
+
+## FileMann 内直接相册导入
 
 入口：
 
@@ -28,25 +66,7 @@ IPA 只包含一个主 App，不再包含 Share Extension，也不请求 App Gro
 FileMann → 媒体 → 从相册导入
 ```
 
-支持多选图片和视频。
-
-默认可以开启：
-
-```
-导入后清理相册原件
-```
-
-流程：
-
-1. 系统 Photos Picker 选择图片/视频。
-2. 复制到 FileMann 私有 Sandbox。
-3. 对复制文件做 byte-size 校验。
-4. 保存 PhotoKit asset identifier。
-5. 全部导入完成后请求 PhotoKit 删除对应相册原件。
-6. iOS 显示系统删除确认。
-7. 用户确认后，相册原件进入“最近删除”。
-
-如果取消系统删除确认，FileMann 已导入副本仍保留。
+这个入口能保留 PhotoKit asset identifier，因此可以在导入校验完成后安全请求清理相册原件。
 
 ## 媒体功能
 
@@ -54,8 +74,8 @@ FileMann → 媒体 → 从相册导入
 - 视频播放和时间轴
 - 上一帧 / 下一帧逐帧查看
 - 图片、视频双指局部放大
-- 非破坏性调整：曝光、鲜明度、高光、阴影、对比度、亮度、黑点、饱和度、自然饱和度、色温、色调、锐度、清晰度、晕影
-- 调整参数保存为 sidecar，原始媒体不改写
+- 曝光、高光、阴影、对比度、亮度、黑点、饱和度、自然饱和度、色温、色调、锐度、清晰度、晕影
+- 编辑参数使用 sidecar 非破坏保存
 
 ## NAS 归档
 

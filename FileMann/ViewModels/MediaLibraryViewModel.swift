@@ -11,12 +11,22 @@ final class MediaLibraryViewModel: ObservableObject {
         let bytes: Int64
     }
 
+    struct InboxImportResult: Sendable {
+        var importedCount = 0
+        var importedBytes: Int64 = 0
+        var unsupportedCount = 0
+        var failedCount = 0
+        var errorDescription: String?
+    }
+
     @Published var items: [MediaItem] = []
     @Published var selectedIDs: Set<String> = []
     @Published var isSelectionMode = false
     @Published var isLoading = false
     @Published var isImportingPhotos = false
+    @Published var isImportingInbox = false
     @Published var photoImportProgress = ""
+    @Published var inboxImportProgress = ""
     @Published var statusMessage: String?
     @Published var errorMessage: String?
 
@@ -102,6 +112,142 @@ final class MediaLibraryViewModel: ObservableObject {
             photoImportProgress = ""
             isImportingPhotos = false
         }
+    }
+
+    func importInboxAndRefresh(showStatus: Bool = true) {
+        guard !isImportingInbox, !isImportingPhotos else { return }
+
+        isImportingInbox = true
+        inboxImportProgress = "正在检查快捷指令 Inbox…"
+
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Self.consumeShortcutInbox()
+            }.value
+
+            if result.importedCount > 0 {
+                FileMannShared.noteLibraryChanged()
+            }
+
+            if showStatus,
+               result.importedCount > 0 ||
+               result.unsupportedCount > 0 ||
+               result.failedCount > 0 ||
+               result.errorDescription != nil {
+                var parts: [String] = []
+                if result.importedCount > 0 {
+                    parts.append(
+                        "快捷指令已导入 \(result.importedCount) 个 · \(ByteFormat.string(result.importedBytes))"
+                    )
+                }
+                if result.unsupportedCount > 0 {
+                    parts.append("跳过 \(result.unsupportedCount) 个非图片/视频文件")
+                }
+                if result.failedCount > 0 {
+                    parts.append("失败 \(result.failedCount) 个")
+                }
+                if let errorDescription = result.errorDescription {
+                    parts.append(errorDescription)
+                }
+                statusMessage = parts.joined(separator: "；")
+            }
+
+            inboxImportProgress = ""
+            isImportingInbox = false
+            refresh(force: true)
+        }
+    }
+
+    private nonisolated static func consumeShortcutInbox() -> InboxImportResult {
+        var result = InboxImportResult()
+
+        do {
+            let inbox = try FileMannShared.inboxDirectory()
+            let urls = try FileManager.default.contentsOfDirectory(
+                at: inbox,
+                includingPropertiesForKeys: [
+                    .isRegularFileKey,
+                    .fileSizeKey,
+                    .contentModificationDateKey
+                ],
+                options: [.skipsHiddenFiles]
+            )
+
+            for sourceURL in urls {
+                do {
+                    let values = try sourceURL.resourceValues(
+                        forKeys: [
+                            .isRegularFileKey,
+                            .fileSizeKey,
+                            .contentModificationDateKey
+                        ]
+                    )
+
+                    guard values.isRegularFile == true else {
+                        continue
+                    }
+
+                    guard FileMannShared.isSupportedMediaFile(sourceURL) else {
+                        result.unsupportedCount += 1
+                        continue
+                    }
+
+                    let sourceSize = Int64(values.fileSize ?? 0)
+                    guard sourceSize > 0 else {
+                        result.failedCount += 1
+                        continue
+                    }
+
+                    let destination = try FileMannShared.uniqueDestination(
+                        suggestedName: sourceURL.lastPathComponent,
+                        sourceURL: sourceURL,
+                        typeIdentifier: nil
+                    )
+
+                    try FileManager.default.moveItem(
+                        at: sourceURL,
+                        to: destination
+                    )
+
+                    let destinationValues = try destination.resourceValues(
+                        forKeys: [.fileSizeKey]
+                    )
+                    let destinationSize = Int64(destinationValues.fileSize ?? 0)
+
+                    guard destinationSize == sourceSize else {
+                        if !FileManager.default.fileExists(atPath: sourceURL.path) {
+                            try? FileManager.default.moveItem(
+                                at: destination,
+                                to: sourceURL
+                            )
+                        }
+                        result.failedCount += 1
+                        continue
+                    }
+
+                    if let modifiedAt = values.contentModificationDate {
+                        try? FileManager.default.setAttributes(
+                            [.modificationDate: modifiedAt],
+                            ofItemAtPath: destination.path
+                        )
+                    }
+
+                    try? FileMannShared.saveImportMetadata(
+                        MediaImportMetadata(source: .shortcut),
+                        for: destination
+                    )
+
+                    result.importedCount += 1
+                    result.importedBytes += destinationSize
+                } catch {
+                    result.failedCount += 1
+                }
+            }
+        } catch {
+            result.errorDescription = "Inbox 读取失败：\(error.localizedDescription)"
+        }
+
+        return result
     }
 
     func toggleSelection(_ item: MediaItem) {

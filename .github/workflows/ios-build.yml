@@ -79,6 +79,8 @@ jobs:
           test -f "$EXECUTABLE"
           lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -qx 'arm64'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'tg.unitgqq2709.tool1'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$APP_PATH/Info.plist")" = 'true'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$APP_PATH/Info.plist" | grep -qx 'filemann'
           test -f "$APP_PATH/Frameworks/AMSMB2.framework/AMSMB2"
           otool -L "$EXECUTABLE" | grep -q '@rpath/AMSMB2.framework/AMSMB2'
 
