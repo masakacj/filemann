@@ -1,4 +1,4 @@
-name: iOS build and signed latest
+name: iOS unsigned IPA
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build:
-    name: Build arm64 IPA
+    name: Build unsigned arm64 IPA
     runs-on: macos-15
     timeout-minutes: 35
 
@@ -46,14 +46,28 @@ jobs:
       - name: Resolve Swift packages
         run: |
           set -euo pipefail
-          xcodebuild             -resolvePackageDependencies             -project FileMann.xcodeproj             -scheme FileMann
+          xcodebuild \
+            -resolvePackageDependencies \
+            -project FileMann.xcodeproj \
+            -scheme FileMann
 
       - name: Build unsigned device app
         run: |
           set -euo pipefail
           set -o pipefail
           mkdir -p build/logs
-          xcodebuild             -project FileMann.xcodeproj             -scheme FileMann             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             -derivedDataPath "$PWD/build/DeviceDerivedData"             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=''             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"             build 2>&1 | tee build/logs/xcodebuild.log
+          xcodebuild \
+            -project FileMann.xcodeproj \
+            -scheme FileMann \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/build/DeviceDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            build 2>&1 | tee build/logs/xcodebuild.log
 
       - name: Validate unsigned app
         run: |
@@ -64,6 +78,7 @@ jobs:
           test -f "$EXECUTABLE"
           lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -qx 'arm64'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'com.masakacj.filemann'
+          test ! -e "$APP_PATH/_CodeSignature"
 
       - name: Package unsigned IPA
         run: |
@@ -79,115 +94,27 @@ jobs:
           )
           test -s "$PWD/build/FileMann-unsigned.ipa"
 
-      - name: Check signing credentials
-        id: signing
-        env:
-          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
-          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-          IOS_MOBILEPROVISION_BASE64: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
-        run: |
-          if [[ -n "${IOS_P12_BASE64:-}" && -n "${IOS_P12_PASSWORD:-}" && -n "${IOS_MOBILEPROVISION_BASE64:-}" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            echo "Signing credentials are available."
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "Signing credentials are not configured; unsigned build succeeded."
-          fi
-
-      - name: Restore signing credentials
-        if: steps.signing.outputs.available == 'true'
-        env:
-          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
-          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-          IOS_MOBILEPROVISION_BASE64: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
-        run: |
-          set -euo pipefail
-          P12_PATH="$RUNNER_TEMP/filemann-signing.p12"
-          PROFILE_PATH="$RUNNER_TEMP/filemann.mobileprovision"
-
-          printf '%s' "$IOS_P12_BASE64" | /usr/bin/base64 -D > "$P12_PATH"
-          printf '%s' "$IOS_MOBILEPROVISION_BASE64" | /usr/bin/base64 -D > "$PROFILE_PATH"
-          chmod 600 "$P12_PATH" "$PROFILE_PATH"
-
-          security cms -D -i "$PROFILE_PATH" > "$RUNNER_TEMP/filemann-profile.plist"
-          PROFILE_TEAM="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$RUNNER_TEMP/filemann-profile.plist")"
-          PROFILE_APP_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/filemann-profile.plist")"
-          PROFILE_BUNDLE_PATTERN="${PROFILE_APP_ID#${PROFILE_TEAM}.}"
-          ORIGINAL_BUNDLE_ID='com.masakacj.filemann'
-
-          if [[ "$PROFILE_BUNDLE_PATTERN" == "*" ]]; then
-            SIGNING_BUNDLE_ID="$ORIGINAL_BUNDLE_ID"
-          elif [[ "$PROFILE_BUNDLE_PATTERN" == *'*' ]]; then
-            PREFIX="${PROFILE_BUNDLE_PATTERN%\*}"
-            if [[ "$ORIGINAL_BUNDLE_ID" == "$PREFIX"* ]]; then
-              SIGNING_BUNDLE_ID="$ORIGINAL_BUNDLE_ID"
-            else
-              SIGNING_BUNDLE_ID="${PREFIX}filemann"
-            fi
-          elif [[ "$PROFILE_BUNDLE_PATTERN" == "$ORIGINAL_BUNDLE_ID" ]]; then
-            SIGNING_BUNDLE_ID="$ORIGINAL_BUNDLE_ID"
-          else
-            echo "::error::The provisioning profile is exact-app-id only ($PROFILE_BUNDLE_PATTERN). Refusing to reuse it because that could overwrite another installed app. Use a wildcard profile or a profile created for $ORIGINAL_BUNDLE_ID."
-            exit 1
-          fi
-
-          [[ -n "$SIGNING_BUNDLE_ID" ]]
-          echo "SIGNING_BUNDLE_ID=$SIGNING_BUNDLE_ID" >> "$GITHUB_ENV"
-          echo "Signing bundle id: $SIGNING_BUNDLE_ID"
-
-      - name: Build zsign
-        if: steps.signing.outputs.available == 'true'
-        run: |
-          set -euo pipefail
-          brew install pkg-config openssl
-          rm -rf "$RUNNER_TEMP/zsign-src"
-          git clone --depth 1 https://github.com/zhlynn/zsign.git "$RUNNER_TEMP/zsign-src"
-          make -C "$RUNNER_TEMP/zsign-src/build/macos" clean
-          make -C "$RUNNER_TEMP/zsign-src/build/macos"
-          ZSIGN="$(find "$RUNNER_TEMP/zsign-src" -type f -name zsign -perm -111 -print -quit)"
-          test -n "$ZSIGN"
-          echo "ZSIGN_PATH=$ZSIGN" >> "$GITHUB_ENV"
-
-      - name: Sign IPA
-        if: steps.signing.outputs.available == 'true'
-        env:
-          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-        run: |
-          set -euo pipefail
-          "$ZSIGN_PATH" -f             -k "$RUNNER_TEMP/filemann-signing.p12"             -p "$IOS_P12_PASSWORD"             -m "$RUNNER_TEMP/filemann.mobileprovision"             -b "$SIGNING_BUNDLE_ID"             -o "$PWD/build/FileMann.ipa"             "$PWD/build/FileMann-unsigned.ipa"
-          test -s "$PWD/build/FileMann.ipa"
-
-      - name: Validate signed IPA
-        if: steps.signing.outputs.available == 'true'
-        run: |
-          set -euo pipefail
-          INSPECT_ROOT="$PWD/build/signed-inspect"
-          rm -rf "$INSPECT_ROOT"
-          mkdir -p "$INSPECT_ROOT"
-          ditto -x -k "$PWD/build/FileMann.ipa" "$INSPECT_ROOT"
-          APP_PATH="$INSPECT_ROOT/Payload/FileMann.app"
-          EXECUTABLE="$APP_PATH/FileMann"
-
-          test -f "$EXECUTABLE"
-          test -d "$APP_PATH/_CodeSignature"
-          test -f "$APP_PATH/embedded.mobileprovision"
-          lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -qx 'arm64'
-          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
-          test "$BUNDLE_ID" = "$SIGNING_BUNDLE_ID"
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-      - name: Publish latest signed IPA
-        if: steps.signing.outputs.available == 'true' && github.ref == 'refs/heads/main'
+      - name: Publish latest unsigned IPA
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          IPA="$PWD/build/FileMann.ipa"
+          IPA="$PWD/build/FileMann-unsigned.ipa"
           test -f "$IPA"
 
-          gh release delete latest             --repo "$GITHUB_REPOSITORY"             --cleanup-tag             --yes || true
+          gh release delete latest \
+            --repo "$GITHUB_REPOSITORY" \
+            --cleanup-tag \
+            --yes || true
 
-          gh release create latest             "$IPA#FileMann.ipa"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "FileMann Latest"             --notes "Latest successful signed FileMann build. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER"             --latest
+          gh release create latest \
+            "$IPA#FileMann-unsigned.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "FileMann Latest Unsigned IPA" \
+            --notes "Unsigned arm64 iOS build for self-signing. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER" \
+            --latest
 
       - name: Upload Xcode build log on failure
         if: failure()
