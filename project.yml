@@ -17,14 +17,22 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: FileMann
+      - path: Shared
     dependencies:
       - package: AMSMB2
         product: AMSMB2
         embed: true
+      - target: FileMannShare
+        embed: true
+    entitlements:
+      path: FileMann/FileMann.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.masakacj.filemann
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann
-        MARKETING_VERSION: 0.1.0
+        MARKETING_VERSION: 0.2.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -48,3 +56,39 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+
+  FileMannShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: FileMannShare
+      - path: Shared
+    entitlements:
+      path: FileMannShare/FileMannShare.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.masakacj.filemann
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.share
+        MARKETING_VERSION: 0.2.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    info:
+      path: FileMannShare/Info.plist
+      properties:
+        CFBundleDisplayName: "保存到 FileMann"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsImageWithMaxCount: 200
+              NSExtensionActivationSupportsMovieWithMaxCount: 200
