@@ -6,7 +6,6 @@ on:
     branches: [main]
     paths:
       - 'FileMann/**'
-      - 'FileMannShare/**'
       - 'Shared/**'
       - 'project.yml'
       - '.github/workflows/ios-build.yml'
@@ -79,14 +78,11 @@ jobs:
           test -d "$APP_PATH"
           test -f "$EXECUTABLE"
           lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -qx 'arm64'
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'com.masakacj.filemann'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'tg.unitgqq2709.tool1'
           test -f "$APP_PATH/Frameworks/AMSMB2.framework/AMSMB2"
           otool -L "$EXECUTABLE" | grep -q '@rpath/AMSMB2.framework/AMSMB2'
 
-          SHARE_APP="$APP_PATH/PlugIns/FileMannShare.appex"
-          test -d "$SHARE_APP"
-          test -f "$SHARE_APP/FileMannShare"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SHARE_APP/Info.plist")" = 'com.masakacj.filemann.share'
+          test ! -e "$APP_PATH/PlugIns/FileMannShare.appex"
 
           test ! -e "$APP_PATH/_CodeSignature"
 

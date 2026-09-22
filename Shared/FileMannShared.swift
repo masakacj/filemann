@@ -26,64 +26,25 @@ struct MediaImportMetadata: Codable, Hashable, Sendable {
 }
 
 enum FileMannShared {
-    static let appGroupID = "group.com.masakacj.filemann"
     static let changeGenerationKey = "media.change.generation"
 
-    enum SharedError: LocalizedError {
-        case appGroupUnavailable
-        case mediaDirectoryUnavailable
-
-        var errorDescription: String? {
-            switch self {
-            case .appGroupUnavailable:
-                return "FileMann App Group 不可用。自签时需要保留 group.com.masakacj.filemann 权限。"
-            case .mediaDirectoryUnavailable:
-                return "无法创建 FileMann 媒体目录。"
-            }
-        }
-    }
-
-    enum StorageMode: String, Sendable {
-        case appGroup
-        case appSandbox
-    }
-
-    static var isRunningInExtension: Bool {
-        Bundle.main.bundleURL.pathExtension.lowercased() == "appex"
-    }
-
-    static func appGroupContainerURL() -> URL? {
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: appGroupID
-        )
-    }
-
-    static func storageMode() -> StorageMode {
-        appGroupContainerURL() == nil ? .appSandbox : .appGroup
-    }
-
     static func mediaRootDirectory() throws -> URL {
-        if let groupURL = appGroupContainerURL() {
-            return groupURL
-                .appendingPathComponent("Media", isDirectory: true)
-        }
-
-        // A Share Extension cannot write into the containing app's sandbox.
-        // Under ad-hoc/self-signing without App Group support, fail explicitly
-        // instead of silently saving into the extension's private container.
-        if isRunningInExtension {
-            throw SharedError.appGroupUnavailable
-        }
-
         let appSupport = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
         )
-        return appSupport
+
+        let root = appSupport
             .appendingPathComponent("FileMann", isDirectory: true)
             .appendingPathComponent("Media", isDirectory: true)
+
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        return root
     }
 
     static func mediaDirectory() throws -> URL {
@@ -207,13 +168,13 @@ enum FileMannShared {
     }
 
     static func noteLibraryChanged() {
-        let defaults = UserDefaults(suiteName: appGroupID)
-        let next = (defaults?.integer(forKey: changeGenerationKey) ?? 0) + 1
-        defaults?.set(next, forKey: changeGenerationKey)
+        let defaults = UserDefaults.standard
+        let next = defaults.integer(forKey: changeGenerationKey) + 1
+        defaults.set(next, forKey: changeGenerationKey)
     }
 
     static func currentGeneration() -> Int {
-        UserDefaults(suiteName: appGroupID)?.integer(forKey: changeGenerationKey) ?? 0
+        UserDefaults.standard.integer(forKey: changeGenerationKey)
     }
 
     private static func timestamp() -> String {
