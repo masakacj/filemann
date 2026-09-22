@@ -1,0 +1,49 @@
+name: FileMann
+
+options:
+  minimumXcodeGenVersion: 2.40.0
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  AMSMB2:
+    url: https://github.com/amosavian/AMSMB2.git
+    exactVersion: 4.0.3
+
+targets:
+  FileMann:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: FileMann
+    dependencies:
+      - package: AMSMB2
+        product: AMSMB2
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: FileMann/Info.plist
+      properties:
+        CFBundleDisplayName: FileMann
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: "FileMann 需要访问局域网中的 SMB/NAS 以归档文件。"
+        LSSupportsOpeningDocumentsInPlace: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
