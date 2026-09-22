@@ -75,9 +75,9 @@ enum FileMannShared {
 
         var name = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if name.isEmpty {
-            name = "Media-\\(Self.timestamp()).\\(inferredExtension)"
+            name = "Media-\(Self.timestamp()).\(inferredExtension)"
         } else if (name as NSString).pathExtension.isEmpty {
-            name += ".\\(inferredExtension)"
+            name += ".\(inferredExtension)"
         }
 
         name = sanitizeFileName(name)
@@ -93,8 +93,8 @@ enum FileMannShared {
 
         while true {
             let fileName = ext.isEmpty
-                ? "\\(base) (\\(index))"
-                : "\\(base) (\\(index)).\\(ext)"
+                ? "\(base) (\(index))"
+                : "\(base) (\(index)).\(ext)"
             candidate = directory.appendingPathComponent(fileName)
             if !FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
