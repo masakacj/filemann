@@ -55,7 +55,10 @@ enum FileMannShared {
             appropriateFor: nil,
             create: true
         )
-        let inbox = documents.appendingPathComponent("Inbox", isDirectory: true)
+        // "Documents/Inbox" is a system-reserved import location on iOS and
+        // apps are not allowed to create it themselves. Use a normal
+        // user-visible folder for Shortcuts instead.
+        let inbox = documents.appendingPathComponent("Shortcut Inbox", isDirectory: true)
         try FileManager.default.createDirectory(
             at: inbox,
             withIntermediateDirectories: true

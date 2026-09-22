@@ -19,7 +19,7 @@ FileMann 会创建并公开：
 ```
 我的 iPhone
 └─ FileMann
-   └─ Inbox
+   └─ Shortcut Inbox
 ```
 
 这是快捷指令与 FileMann 之间的中转目录。
@@ -35,7 +35,7 @@ FileMann 会创建并公开：
 快捷指令步骤：
 
 1. 接收共享表单中的“图像”和“媒体”。
-2. “存储文件”：输入使用“快捷指令输入”，目标固定到“我的 iPhone / FileMann / Inbox”，关闭“询问存储位置”。
+2. “存储文件”：输入使用“快捷指令输入”，目标固定到“我的 iPhone / FileMann / Shortcut Inbox”，关闭“询问存储位置”。
 3. “打开 URL”：`filemann://inbox`。也可以改成“打开 App → FileMann”。
 4. 第一轮测试先不要加“删除照片”。
 
@@ -45,16 +45,16 @@ FileMann 会创建并公开：
 相册多选
 → 分享
 → 保存到 FileMann
-→ 文件写入 Inbox
+→ 文件写入 Shortcut Inbox
 → 自动打开 FileMann
-→ FileMann 自动接管 Inbox
+→ FileMann 自动接管 Shortcut Inbox
 → 移入私有媒体库
-→ Inbox 清空
+→ Shortcut Inbox 清空
 ```
 
-FileMann 每次启动、回到前台，都会自动扫描 Inbox。
+FileMann 每次启动、回到前台，都会自动扫描 Shortcut Inbox。
 
-Inbox 中图片/视频会被移动到 FileMann 的私有 Application Support 媒体库。移动后会再次检查文件字节大小，只有大小一致才记为成功导入。非图片/视频文件不会被删除，会留在 Inbox。
+Shortcut Inbox 中图片/视频会被移动到 FileMann 的私有 Application Support 媒体库。移动后会再次检查文件字节大小，只有大小一致才记为成功导入。非图片/视频文件不会被删除，会留在 Inbox。
 
 第一轮验证成功后，可以在快捷指令的“存储文件”动作之后加入“删除照片”，让 iOS 对共享输入执行照片删除。建议先用 1 张图片和 1 个短视频测试完整流程，再开启删除。
 
@@ -97,4 +97,13 @@ FileMann-unsigned.ipa
 
 ```
 latest
+```
+
+
+### 为什么不是 Documents/Inbox
+
+iOS 的 `Documents/Inbox` 是系统保留的导入目录，应用不能自行创建，所以快捷指令中转目录使用：
+
+```
+我的 iPhone / FileMann / Shortcut Inbox
 ```

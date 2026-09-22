@@ -31,7 +31,7 @@ struct MediaLibraryView: View {
                         ContentUnavailableView {
                             Label("媒体库为空", systemImage: "photo.on.rectangle")
                         } description: {
-                            Text("可从 FileMann 内导入相册，也可以用分享菜单中的“保存到 FileMann”快捷指令写入 Inbox。")
+                            Text("可从 FileMann 内导入相册，也可以用分享菜单中的“保存到 FileMann”快捷指令写入 Shortcut Inbox。")
                         }
 
                         Button {
@@ -104,7 +104,7 @@ struct MediaLibraryView: View {
                             Button {
                                 viewModel.importInboxAndRefresh()
                             } label: {
-                                Label("扫描快捷指令 Inbox", systemImage: "tray.and.arrow.down")
+                                Label("扫描 Shortcut Inbox", systemImage: "tray.and.arrow.down")
                             }
 
                             Button {
