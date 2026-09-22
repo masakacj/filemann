@@ -1,20 +1,57 @@
 # FileMann
 
-FileMann EasySign 版：iOS 本地媒体库 + SMB/NAS 归档工具。
+FileMann EasySign 单 App 版：本地媒体库、逐帧播放器和 SMB/NAS 归档已经合并为一个主界面。
 
-## EasySign 签名目标
+## 主界面
 
-当前 Bundle ID：
+不再使用独立“归档”Tab。
+
+媒体页面顶部会在有归档任务时显示 NAS 归档卡片，包括：
+
+- 总进度、速度
+- 暂停 / 继续
+- 重复文件处理
+- NAS 双边校验结果
+- 单任务状态
+- SMB / NAS 设置
+
+媒体多选后直接点：
 
 ```
-tg.unitgqq2709.tool1
+归档到 NAS
 ```
 
-IPA 只包含主 App，不包含 Share Extension，也不依赖 App Group。
+即可加入并启动归档。
 
-## 快捷指令分享方案
+## 缩略图大小
 
-FileMann 会创建并公开：
+右上角：
+
+```
+… → 缩略图大小
+```
+
+支持紧凑 / 小 / 中 / 大，选择会自动记忆。
+
+## 视频播放
+
+- 上一帧 / 下一帧：点按精确逐帧
+- 按住上一帧 / 下一帧：连续逐帧
+- 长按视频画面：临时 2× 播放，松手恢复
+- 双指：局部放大
+
+“视频调整”默认收起，点击后展开。
+
+视频调整只作用于**当前这一次播放会话**：
+
+- 不改写源文件
+- 不保存 sidecar
+- 退出视频后自动还原
+- 不影响其他视频
+
+## 快捷指令分享
+
+中转目录：
 
 ```
 我的 iPhone
@@ -22,88 +59,60 @@ FileMann 会创建并公开：
    └─ Shortcut Inbox
 ```
 
-这是快捷指令与 FileMann 之间的中转目录。
+FileMann 会把快捷指令复制进来的图片 / 视频移动到私有媒体库。
 
-推荐创建一个名为：
+### 删除相册原件开关
 
-```
-保存到 FileMann
-```
-
-的快捷指令，并开启“在共享表单中显示”。
-
-快捷指令步骤：
-
-1. 接收共享表单中的“图像”和“媒体”。
-2. “存储文件”：输入使用“快捷指令输入”，目标固定到“我的 iPhone / FileMann / Shortcut Inbox”，关闭“询问存储位置”。
-3. “打开 URL”：`filemann://inbox`。也可以改成“打开 App → FileMann”。
-4. 第一轮测试先不要加“删除照片”。
-
-操作：
+FileMann：
 
 ```
-相册多选
-→ 分享
-→ 保存到 FileMann
-→ 文件写入 Shortcut Inbox
-→ 自动打开 FileMann
-→ FileMann 自动接管 Shortcut Inbox
-→ 移入私有媒体库
-→ Shortcut Inbox 清空
+… → 快捷指令复制后询问删除相册原件
 ```
 
-FileMann 每次启动、回到前台，都会自动扫描 Shortcut Inbox。
-
-Shortcut Inbox 中图片/视频会被移动到 FileMann 的私有 Application Support 媒体库。移动后会再次检查文件字节大小，只有大小一致才记为成功导入。非图片/视频文件不会被删除，会留在 Inbox。
-
-第一轮验证成功后，可以在快捷指令的“存储文件”动作之后加入“删除照片”，让 iOS 对共享输入执行照片删除。建议先用 1 张图片和 1 个短视频测试完整流程，再开启删除。
-
-## FileMann 内直接相册导入
-
-入口：
+这个开关会同步到：
 
 ```
-FileMann → 媒体 → 从相册导入
+我的 iPhone / FileMann / FileMann Shortcut Settings.txt
 ```
 
-这个入口能保留 PhotoKit asset identifier，因此可以在导入校验完成后安全请求清理相册原件。
+文件内容为：
 
-## 媒体功能
+```
+ask_delete_originals=1
+```
 
-- 图片、视频网格浏览
-- 视频播放和时间轴
-- 上一帧 / 下一帧逐帧查看
-- 图片、视频双指局部放大
-- 曝光、高光、阴影、对比度、亮度、黑点、饱和度、自然饱和度、色温、色调、锐度、清晰度、晕影
-- 编辑参数使用 sidecar 非破坏保存
+或：
 
-## NAS 归档
+```
+ask_delete_originals=0
+```
 
-- SMB2 / SMB3（AMSMB2）
-- `.filemann-partial` 断点续传
-- 总进度 / 单文件进度 / 实时速度
-- byte-for-byte 重复文件检测
-- 整批文件数 + 总字节数校验通过后，才允许删除 FileMann 本地源文件
+快捷指令可以读取这个文件，只有值为 1 时才显示“是否删除相册原件？”确认，然后把最初的“快捷指令输入”交给“删除照片”。
+
+这样开关由 FileMann 控制，但真正的相册删除仍由持有原始 Photos 输入的快捷指令完成，避免 FileMann 根据文件名猜测照片身份。
+
+## FileMann 内相册导入
+
+```
+FileMann → 右上角照片+
+```
+
+这一条通过 PhotoKit asset identifier 精确删除，因此仍可使用：
+
+```
+FileMann 导入后清理相册原件
+```
+
+## EasySign
+
+Bundle ID：
+
+```
+tg.unitgqq2709.tool1
+```
+
+IPA 不包含 Share Extension，也不依赖 App Group。
 
 ## Release
 
-GitHub Actions 云端生成 unsigned arm64 IPA：
-
-```
-FileMann-unsigned.ipa
-```
-
-固定 Release tag：
-
-```
-latest
-```
-
-
-### 为什么不是 Documents/Inbox
-
-iOS 的 `Documents/Inbox` 是系统保留的导入目录，应用不能自行创建，所以快捷指令中转目录使用：
-
-```
-我的 iPhone / FileMann / Shortcut Inbox
-```
+最新 unsigned arm64 IPA 固定发布到 `latest` Release。

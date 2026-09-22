@@ -66,6 +66,27 @@ enum FileMannShared {
         return inbox
     }
 
+    static func shortcutSettingsURL() throws -> URL {
+        let documents = try FileManager.default.url(
+            for: .documentDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return documents.appendingPathComponent(
+            "FileMann Shortcut Settings.txt",
+            isDirectory: false
+        )
+    }
+
+    static func writeShortcutSettings(askDeleteOriginals: Bool) throws {
+        let value = askDeleteOriginals ? "ask_delete_originals=1\n" : "ask_delete_originals=0\n"
+        try Data(value.utf8).write(
+            to: try shortcutSettingsURL(),
+            options: [.atomic]
+        )
+    }
+
     static func mediaDirectory() throws -> URL {
         let root = try mediaRootDirectory()
             .appendingPathComponent("Originals", isDirectory: true)

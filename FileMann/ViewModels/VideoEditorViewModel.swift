@@ -3,11 +3,12 @@ import Foundation
 
 @MainActor
 final class VideoEditorViewModel: ObservableObject {
-    @Published var adjustments: MediaAdjustments
+    @Published var adjustments: MediaAdjustments = .neutral
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var frameRate: Double = 0
     @Published var isPlaying = false
+    @Published var isFastForwarding = false
     @Published var errorMessage: String?
 
     let url: URL
@@ -16,10 +17,10 @@ final class VideoEditorViewModel: ObservableObject {
     private let asset: AVURLAsset
     private var timeObserver: Any?
     private var filterTask: Task<Void, Never>?
+    private var wasPlayingBeforeFastForward = false
 
     init(url: URL) {
         self.url = url
-        self.adjustments = MediaSidecarStore.load(for: url)
         self.asset = AVURLAsset(url: url)
         self.player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
 
@@ -36,7 +37,6 @@ final class VideoEditorViewModel: ObservableObject {
 
         Task {
             await loadMetadata()
-            scheduleFilterUpdate(immediate: true)
         }
     }
 
@@ -44,6 +44,16 @@ final class VideoEditorViewModel: ObservableObject {
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
         }
+    }
+
+    var currentFrame: Int {
+        guard frameRate > 0 else { return 0 }
+        return max(0, Int((currentTime * frameRate).rounded()))
+    }
+
+    var totalFrames: Int {
+        guard frameRate > 0, duration > 0 else { return 0 }
+        return max(0, Int((duration * frameRate).rounded()))
     }
 
     func togglePlayback() {
@@ -59,11 +69,13 @@ final class VideoEditorViewModel: ObservableObject {
     func pause() {
         player.pause()
         isPlaying = false
+        isFastForwarding = false
     }
 
     func step(_ count: Int) {
         player.pause()
         isPlaying = false
+        isFastForwarding = false
         player.currentItem?.step(byCount: count)
         currentTime = max(0, CMTimeGetSeconds(player.currentTime()))
     }
@@ -74,6 +86,31 @@ final class VideoEditorViewModel: ObservableObject {
             preferredTimescale: 600
         )
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func beginFastForward() {
+        guard !isFastForwarding else { return }
+        wasPlayingBeforeFastForward = player.rate != 0
+
+        if !wasPlayingBeforeFastForward {
+            player.play()
+        }
+        player.rate = 2.0
+        isPlaying = true
+        isFastForwarding = true
+    }
+
+    func endFastForward() {
+        guard isFastForwarding else { return }
+
+        if wasPlayingBeforeFastForward {
+            player.rate = 1.0
+            isPlaying = true
+        } else {
+            player.pause()
+            isPlaying = false
+        }
+        isFastForwarding = false
     }
 
     func reset() {
@@ -89,13 +126,12 @@ final class VideoEditorViewModel: ObservableObject {
         filterTask?.cancel()
 
         let adjustments = self.adjustments
-        let url = self.url
         let asset = self.asset
         let playerItem = self.player.currentItem
 
         filterTask = Task {
-            try? MediaSidecarStore.save(adjustments, for: url)
-
+            // Video adjustments are intentionally session-only.
+            // Do not write a sidecar or touch the original file.
             if !immediate {
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
