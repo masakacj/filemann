@@ -64,7 +64,7 @@ final class ShareViewController: UIViewController {
         var failures = 0
 
         for (index, provider) in providers.enumerated() {
-            detailLabel.text = "正在保存 \\(index + 1) / \\(providers.count)…"
+            detailLabel.text = "正在保存 \(index + 1) / \(providers.count)…"
 
             do {
                 try await importProvider(provider)
@@ -79,9 +79,9 @@ final class ShareViewController: UIViewController {
         }
 
         if failures == 0 {
-            finish(message: "已保存 \\(imported) 个项目", success: true)
+            finish(message: "已保存 \(imported) 个项目", success: true)
         } else {
-            finish(message: "已保存 \\(imported) 个，失败 \\(failures) 个", success: imported > 0)
+            finish(message: "已保存 \(imported) 个，失败 \(failures) 个", success: imported > 0)
         }
     }
 
