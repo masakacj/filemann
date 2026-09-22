@@ -43,18 +43,51 @@ enum FileMannShared {
         }
     }
 
-    static func containerURL() throws -> URL {
-        guard let url = FileManager.default.containerURL(
+    enum StorageMode: String, Sendable {
+        case appGroup
+        case appSandbox
+    }
+
+    static var isRunningInExtension: Bool {
+        Bundle.main.bundleURL.pathExtension.lowercased() == "appex"
+    }
+
+    static func appGroupContainerURL() -> URL? {
+        FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: appGroupID
-        ) else {
+        )
+    }
+
+    static func storageMode() -> StorageMode {
+        appGroupContainerURL() == nil ? .appSandbox : .appGroup
+    }
+
+    static func mediaRootDirectory() throws -> URL {
+        if let groupURL = appGroupContainerURL() {
+            return groupURL
+                .appendingPathComponent("Media", isDirectory: true)
+        }
+
+        // A Share Extension cannot write into the containing app's sandbox.
+        // Under ad-hoc/self-signing without App Group support, fail explicitly
+        // instead of silently saving into the extension's private container.
+        if isRunningInExtension {
             throw SharedError.appGroupUnavailable
         }
-        return url
+
+        let appSupport = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return appSupport
+            .appendingPathComponent("FileMann", isDirectory: true)
+            .appendingPathComponent("Media", isDirectory: true)
     }
 
     static func mediaDirectory() throws -> URL {
-        let root = try containerURL()
-            .appendingPathComponent("Media", isDirectory: true)
+        let root = try mediaRootDirectory()
             .appendingPathComponent("Originals", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,
@@ -64,8 +97,7 @@ enum FileMannShared {
     }
 
     static func sidecarDirectory() throws -> URL {
-        let root = try containerURL()
-            .appendingPathComponent("Media", isDirectory: true)
+        let root = try mediaRootDirectory()
             .appendingPathComponent("Edits", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,
@@ -75,8 +107,7 @@ enum FileMannShared {
     }
 
     static func importMetadataDirectory() throws -> URL {
-        let root = try containerURL()
-            .appendingPathComponent("Media", isDirectory: true)
+        let root = try mediaRootDirectory()
             .appendingPathComponent("Imports", isDirectory: true)
         try FileManager.default.createDirectory(
             at: root,
