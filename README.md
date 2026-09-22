@@ -1,57 +1,74 @@
 # FileMann
 
-iOS 上的 SMB/NAS 归档工具，目标是解决“大量文件从 Documents 等 File Provider 归档到 SMB 后删除手机本地文件”时缺少可靠进度和断点续传的问题。
+iOS 本地媒体库 + SMB/NAS 归档工具。
 
-## 当前 MVP
+## 当前工作流
 
-- 通过 iOS 系统文件选择器从 Documents 等 File Provider 多选文件
-- 保存 security-scoped bookmark，App 重启后保留任务
-- SMB2/SMB3 上传（AMSMB2 4.0.3）
-- 使用 `.filemann-partial` 临时文件
-- 根据 NAS 上 partial 的真实大小进行字节级断点续传
-- 总进度、单文件进度、实时速度
-- 上传完成后校验远端文件大小
-- 原子重命名 partial 为最终文件
-- 可选：归档成功后删除源文件
-- 密码保存在 iOS Keychain
-- 传输期间保持屏幕常亮；切后台后会尽量使用 iOS background task 延长运行时间
+1. 在 iOS 相册选择图片/视频。
+2. 分享 → **保存到 FileMann**。
+3. Share Extension 把原始媒体复制到 FileMann 的共享媒体目录。
+4. FileMann 中可浏览图片和视频；图片/视频调整以 sidecar 方式无损保存。
+5. 视频支持暂停后上一帧/下一帧、时间轴拖动、双指局部放大。
+6. 需要归档时，从媒体库多选 → 加入归档 → SMB 断点续传 → 整批校验 → 可选删除本地副本。
 
-## SMB 路径
+## 媒体调整
 
-如果 NAS 路径是：
+当前有：
+
+- 曝光
+- 鲜明度
+- 高光
+- 阴影
+- 对比度
+- 亮度
+- 黑点
+- 饱和度
+- 自然饱和度
+- 色温
+- 色调
+- 锐度
+- 清晰度
+- 晕影
+
+调整是**非破坏性的**：原始媒体不改写，参数保存在 FileMann sidecar 中。
+
+## SMB 归档
+
+- SMB2 / SMB3（AMSMB2）
+- `.filemann-partial` 临时文件
+- 按 NAS 上 partial 的真实字节数断点续传
+- 总进度 / 单文件进度 / 实时速度
+- byte-for-byte 重复文件检测
+- 整批文件数 + 总字节数校验通过后才允许删除手机源文件
+
+## 自签名的重要说明
+
+FileMann 现在包含一个 Share Extension，主 App 与 Extension 通过 App Group 共享媒体目录：
 
 ```
-\\NAS\storage\Documentsf\Apps
+group.com.masakacj.filemann
 ```
 
-则设置为：
+所以自签时需要：
 
-- 服务器：`NAS` 或 NAS IP
-- 共享名：`storage`
-- 归档目录：`Documentsf/Apps`
+- 对主 App 和 `PlugIns/FileMannShare.appex` 都递归签名；
+- provisioning profile / signer 必须保留并允许 `com.apple.security.application-groups`；
+- App Group 值必须包含 `group.com.masakacj.filemann`。
+
+如果签名后 App Group 被移除，主 App 可以启动，但“保存到 FileMann”无法把媒体交给主 App。
 
 ## 云端构建
 
-工程由 XcodeGen 生成，GitHub Actions 使用标准 `macos-15` runner 编译。
+GitHub Actions 使用标准 `macos-15` runner 构建 unsigned arm64 IPA。
 
-签名流程沿用 laocai-manager 的 zsign 方案。要生成可直接自签安装的 Release IPA，在本仓库 Settings → Secrets and variables → Actions 中配置：
-
-- `IOS_P12_BASE64`
-- `IOS_P12_PASSWORD`
-- `IOS_MOBILEPROVISION_BASE64`
-
-没有配置签名 secrets 时，Actions 仍会执行完整的 unsigned device build，用于云端编译检查，但不会发布 signed Release。
-
-> 不要把 p12、密码或 mobileprovision 提交到仓库。仓库可以公开，签名材料必须只放 GitHub Secrets。
-
-## Release
-
-成功签名后，workflow 会维护一个 `latest` Release，并上传：
+最新构建始终发布为：
 
 ```
-FileMann.ipa
+FileMann-unsigned.ipa
 ```
 
-## 说明
+Release tag：
 
-AMSMB2 本身为开源项目，并动态链接其 SMB 依赖。当前项目主要面向自签/个人设备使用。
+```
+latest
+```
