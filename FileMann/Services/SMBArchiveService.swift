@@ -234,7 +234,7 @@ final class SMBArchiveService {
     }
 
     func verifyManifest(_ tasks: [ArchiveTask]) async -> BatchVerification {
-        let expected = tasks.filter { $0.state == .completed }
+        let expected = tasks.filter { $0.state != .skipped }
         let expectedCount = expected.count
         let expectedBytes = expected.reduce(Int64(0)) { $0 + $1.fileSize }
 
