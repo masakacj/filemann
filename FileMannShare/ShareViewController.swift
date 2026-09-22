@@ -101,8 +101,12 @@ final class ShareViewController: UIViewController {
             )
         }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            provider.loadFileRepresentation(forTypeIdentifier: typeIdentifier) { sourceURL, error in
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Void, Error>) in
+
+            provider.loadFileRepresentation(
+                forTypeIdentifier: typeIdentifier
+            ) { sourceURL, error in
                 if let error {
                     continuation.resume(throwing: error)
                     return
@@ -128,13 +132,36 @@ final class ShareViewController: UIViewController {
 
                     try FileManager.default.copyItem(at: sourceURL, to: destination)
 
-                    if let attributes = try? FileManager.default.attributesOfItem(atPath: sourceURL.path),
-                       let modificationDate = attributes[.modificationDate] as? Date {
+                    let sourceAttributes = try FileManager.default.attributesOfItem(
+                        atPath: sourceURL.path
+                    )
+                    let destinationAttributes = try FileManager.default.attributesOfItem(
+                        atPath: destination.path
+                    )
+
+                    let sourceSize = (sourceAttributes[.size] as? NSNumber)?.int64Value ?? 0
+                    let destinationSize = (destinationAttributes[.size] as? NSNumber)?.int64Value ?? 0
+
+                    guard sourceSize == destinationSize else {
+                        try? FileManager.default.removeItem(at: destination)
+                        throw NSError(
+                            domain: "FileMannShare",
+                            code: 3,
+                            userInfo: [NSLocalizedDescriptionKey: "共享导入文件大小校验失败"]
+                        )
+                    }
+
+                    if let modificationDate = sourceAttributes[.modificationDate] as? Date {
                         try? FileManager.default.setAttributes(
                             [.modificationDate: modificationDate],
                             ofItemAtPath: destination.path
                         )
                     }
+
+                    try FileMannShared.saveImportMetadata(
+                        MediaImportMetadata(source: .share),
+                        for: destination
+                    )
 
                     continuation.resume()
                 } catch {

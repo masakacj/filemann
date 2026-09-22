@@ -2,73 +2,67 @@
 
 iOS 本地媒体库 + SMB/NAS 归档工具。
 
-## 当前工作流
+## 两种相册入口
 
-1. 在 iOS 相册选择图片/视频。
-2. 分享 → **保存到 FileMann**。
-3. Share Extension 把原始媒体复制到 FileMann 的共享媒体目录。
-4. FileMann 中可浏览图片和视频；图片/视频调整以 sidecar 方式无损保存。
-5. 视频支持暂停后上一帧/下一帧、时间轴拖动、双指局部放大。
-6. 需要归档时，从媒体库多选 → 加入归档 → SMB 断点续传 → 整批校验 → 可选删除本地副本。
+### 1. 最快：iOS 相册 → 分享 → 保存到 FileMann
 
-## 媒体调整
+Share Extension 会把图片/视频复制到 FileMann 媒体库。这个入口最省操作，但 iOS 的普通分享数据不可靠地携带可删除的 `PHAsset` 身份，所以 FileMann **不会猜测并删除相册原件**。
 
-当前有：
+### 2. 可安全清理原件：FileMann → 从相册导入
 
-- 曝光
-- 鲜明度
-- 高光
-- 阴影
-- 对比度
-- 亮度
-- 黑点
-- 饱和度
-- 自然饱和度
-- 色温
-- 色调
-- 锐度
-- 清晰度
-- 晕影
+FileMann 使用带 `PHPhotoLibrary.shared()` 的系统 Photos Picker，因此能保留每个选择项的 PhotoKit asset identifier。
 
-调整是**非破坏性的**：原始媒体不改写，参数保存在 FileMann sidecar 中。
+默认开启：
 
-## SMB 归档
+`导入后清理相册原件`
+
+流程：
+
+1. 复制到 FileMann。
+2. 对复制文件做 byte-size 校验。
+3. 保存 PhotoKit asset identifier。
+4. 导入全部完成后请求 PhotoKit 删除对应原件。
+5. iOS 显示系统删除确认。
+6. 用户确认后，相册原件进入 Photos 的“最近删除”。
+
+如果用户取消系统删除确认，FileMann 本地副本仍保留。
+
+## FileMann 媒体库
+
+- 图片、视频网格浏览
+- 图片/视频预览
+- 视频播放、时间轴
+- 上一帧 / 下一帧逐帧查看
+- 图片、视频双指局部放大
+- 非破坏性调整：曝光、鲜明度、高光、阴影、对比度、亮度、黑点、饱和度、自然饱和度、色温、色调、锐度、清晰度、晕影
+- 调整参数保存在 sidecar，原始媒体不改写
+
+## SMB / NAS 归档
 
 - SMB2 / SMB3（AMSMB2）
-- `.filemann-partial` 临时文件
-- 按 NAS 上 partial 的真实字节数断点续传
+- `.filemann-partial` 断点续传
 - 总进度 / 单文件进度 / 实时速度
 - byte-for-byte 重复文件检测
-- 整批文件数 + 总字节数校验通过后才允许删除手机源文件
+- 整批文件数 + 总字节数校验通过后才允许删除 FileMann 本地源文件
 
-## 自签名的重要说明
+## 自签名
 
-FileMann 现在包含一个 Share Extension，主 App 与 Extension 通过 App Group 共享媒体目录：
+IPA 包含主 App 和 Share Extension：
 
-```
-group.com.masakacj.filemann
-```
+`FileMann.app/PlugIns/FileMannShare.appex`
 
-所以自签时需要：
+主 App 与扩展通过 App Group 共享媒体：
 
-- 对主 App 和 `PlugIns/FileMannShare.appex` 都递归签名；
-- provisioning profile / signer 必须保留并允许 `com.apple.security.application-groups`；
-- App Group 值必须包含 `group.com.masakacj.filemann`。
+`group.com.masakacj.filemann`
 
-如果签名后 App Group 被移除，主 App 可以启动，但“保存到 FileMann”无法把媒体交给主 App。
+自签时需要递归签名主 App、AMSMB2.framework、FileMannShare.appex，并且主 App 与扩展的 provisioning profile 都要允许对应 App Group。
 
-## 云端构建
+## Release
 
-GitHub Actions 使用标准 `macos-15` runner 构建 unsigned arm64 IPA。
+GitHub Actions 构建 unsigned arm64 IPA：
 
-最新构建始终发布为：
+`FileMann-unsigned.ipa`
 
-```
-FileMann-unsigned.ipa
-```
+固定 Release tag：
 
-Release tag：
-
-```
-latest
-```
+`latest`

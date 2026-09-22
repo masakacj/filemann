@@ -1,6 +1,30 @@
 import Foundation
 import UniformTypeIdentifiers
 
+enum MediaImportSource: String, Codable, Hashable, Sendable {
+    case share
+    case photoPicker
+}
+
+struct MediaImportMetadata: Codable, Hashable, Sendable {
+    var source: MediaImportSource
+    var sourceAssetIdentifier: String?
+    var importedAt: Date
+    var photoDeletedAt: Date?
+
+    init(
+        source: MediaImportSource,
+        sourceAssetIdentifier: String? = nil,
+        importedAt: Date = Date(),
+        photoDeletedAt: Date? = nil
+    ) {
+        self.source = source
+        self.sourceAssetIdentifier = sourceAssetIdentifier
+        self.importedAt = importedAt
+        self.photoDeletedAt = photoDeletedAt
+    }
+}
+
 enum FileMannShared {
     static let appGroupID = "group.com.masakacj.filemann"
     static let changeGenerationKey = "media.change.generation"
@@ -50,9 +74,57 @@ enum FileMannShared {
         return root
     }
 
+    static func importMetadataDirectory() throws -> URL {
+        let root = try containerURL()
+            .appendingPathComponent("Media", isDirectory: true)
+            .appendingPathComponent("Imports", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        return root
+    }
+
     static func sidecarURL(for mediaURL: URL) throws -> URL {
         try sidecarDirectory()
             .appendingPathComponent(mediaURL.lastPathComponent + ".json")
+    }
+
+    static func importMetadataURL(for mediaURL: URL) throws -> URL {
+        try importMetadataDirectory()
+            .appendingPathComponent(mediaURL.lastPathComponent + ".json")
+    }
+
+    static func loadImportMetadata(for mediaURL: URL) -> MediaImportMetadata? {
+        guard let url = try? importMetadataURL(for: mediaURL),
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(MediaImportMetadata.self, from: data)
+    }
+
+    static func saveImportMetadata(
+        _ metadata: MediaImportMetadata,
+        for mediaURL: URL
+    ) throws {
+        let data = try JSONEncoder().encode(metadata)
+        let url = try importMetadataURL(for: mediaURL)
+        try data.write(to: url, options: [.atomic])
+    }
+
+    static func markPhotoDeleted(for mediaURL: URL) {
+        guard var metadata = loadImportMetadata(for: mediaURL) else { return }
+        metadata.photoDeletedAt = Date()
+        try? saveImportMetadata(metadata, for: mediaURL)
+    }
+
+    static func removeCompanionFiles(for mediaURL: URL) {
+        if let sidecar = try? sidecarURL(for: mediaURL) {
+            try? FileManager.default.removeItem(at: sidecar)
+        }
+        if let importMetadata = try? importMetadataURL(for: mediaURL) {
+            try? FileManager.default.removeItem(at: importMetadata)
+        }
     }
 
     static func uniqueDestination(

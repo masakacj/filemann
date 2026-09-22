@@ -32,7 +32,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann
-        MARKETING_VERSION: 0.2.0
+        MARKETING_VERSION: 0.3.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -45,6 +45,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: "FileMann 需要访问局域网中的 SMB/NAS 以归档文件。"
+        NSPhotoLibraryUsageDescription: "FileMann 需要访问你选择的照片和视频，以便导入后按你的设置清理相册原件。"
         LSSupportsOpeningDocumentsInPlace: true
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:
@@ -72,7 +73,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.share
-        MARKETING_VERSION: 0.2.0
+        MARKETING_VERSION: 0.3.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"

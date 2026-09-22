@@ -286,6 +286,7 @@ final class SMBArchiveService {
         ) { coordinatedURL in
             do {
                 try FileManager.default.removeItem(at: coordinatedURL)
+                FileMannShared.removeCompanionFiles(for: coordinatedURL)
             } catch {
                 deletionError = error
             }
