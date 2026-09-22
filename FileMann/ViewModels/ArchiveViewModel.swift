@@ -61,7 +61,7 @@ final class ArchiveViewModel: ObservableObject {
                 }
 
                 let bookmark = try url.bookmarkData(
-                    options: .withSecurityScope,
+                    options: .minimalBookmark,
                     includingResourceValuesForKeys: nil,
                     relativeTo: nil
                 )
@@ -255,7 +255,7 @@ final class ArchiveViewModel: ObservableObject {
         var stale = false
         let url = try URL(
             resolvingBookmarkData: bookmark,
-            options: .withSecurityScope,
+            options: [],
             relativeTo: nil,
             bookmarkDataIsStale: &stale
         )
