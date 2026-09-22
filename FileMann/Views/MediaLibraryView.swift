@@ -3,6 +3,10 @@ import SwiftUI
 
 struct MediaLibraryView: View {
     @EnvironmentObject private var archiveViewModel: ArchiveViewModel
+
+    private var directShareAvailable: Bool {
+        FileMannShared.storageMode() == .appGroup
+    }
     @StateObject private var viewModel = MediaLibraryViewModel()
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("filemann.photos.deleteAfterImport")
@@ -30,7 +34,11 @@ struct MediaLibraryView: View {
                         ContentUnavailableView {
                             Label("媒体库为空", systemImage: "photo.on.rectangle")
                         } description: {
-                            Text("可从 FileMann 内导入相册，也可以在 iOS 相册中“分享 → 保存到 FileMann”。")
+                            Text(
+                            directShareAvailable
+                            ? "可从 FileMann 内导入相册，也可以在 iOS 相册中“分享 → 保存到 FileMann”。"
+                            : "当前自签名没有 App Group 权限；请使用“从相册导入”。媒体仍会正常保存在 FileMann 本地。"
+                        )
                         }
 
                         Button {
@@ -108,14 +116,29 @@ struct MediaLibraryView: View {
                 }
             }
             .safeAreaInset(edge: .top) {
-                if let status = viewModel.statusMessage, !status.isEmpty {
-                    Text(status)
+                VStack(spacing: 0) {
+                    if !directShareAvailable {
+                        Label(
+                            "当前签名不支持 App Group：相册“分享 → FileMann”不可用；“从相册导入”可正常使用。",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal)
                         .padding(.vertical, 7)
                         .background(.thinMaterial)
+                    }
+
+                    if let status = viewModel.statusMessage, !status.isEmpty {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal)
+                            .padding(.vertical, 7)
+                            .background(.thinMaterial)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
