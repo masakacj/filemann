@@ -124,8 +124,11 @@ jobs:
             else
               SIGNING_BUNDLE_ID="${PREFIX}filemann"
             fi
+          elif [[ "$PROFILE_BUNDLE_PATTERN" == "$ORIGINAL_BUNDLE_ID" ]]; then
+            SIGNING_BUNDLE_ID="$ORIGINAL_BUNDLE_ID"
           else
-            SIGNING_BUNDLE_ID="$PROFILE_BUNDLE_PATTERN"
+            echo "::error::The provisioning profile is exact-app-id only ($PROFILE_BUNDLE_PATTERN). Refusing to reuse it because that could overwrite another installed app. Use a wildcard profile or a profile created for $ORIGINAL_BUNDLE_ID."
+            exit 1
           fi
 
           [[ -n "$SIGNING_BUNDLE_ID" ]]
