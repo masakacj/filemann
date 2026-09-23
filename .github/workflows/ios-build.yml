@@ -1,4 +1,4 @@
-name: iOS unsigned IPA
+name: iOS verified unsigned IPA
 
 on:
   workflow_dispatch:
@@ -7,6 +7,9 @@ on:
     paths:
       - 'FileMann/**'
       - 'Shared/**'
+      - 'FileMannTests/**'
+      - 'FileMannUITests/**'
+      - 'Tests/**'
       - 'project.yml'
       - '.github/workflows/ios-build.yml'
 
@@ -21,10 +24,10 @@ env:
   XCODE_VERSION: "16.4"
 
 jobs:
-  build:
-    name: Build unsigned arm64 IPA
+  build-test-release:
+    name: Test, build and publish unsigned IPA
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
@@ -47,28 +50,69 @@ jobs:
       - name: Resolve Swift packages
         run: |
           set -euo pipefail
-          xcodebuild \
-            -resolvePackageDependencies \
-            -project FileMann.xcodeproj \
-            -scheme FileMann
+          xcodebuild             -resolvePackageDependencies             -project FileMann.xcodeproj             -scheme FileMann
+
+      - name: Run unit, UI and WebDAV integration tests
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          mkdir -p build/logs build/mock-webdav build/test-results
+
+          SIM_UDID="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data=json.load(sys.stdin)["devices"]
+          choices=[]
+          for runtime, devices in data.items():
+              if "iOS" not in runtime:
+                  continue
+              for d in devices:
+                  if d.get("isAvailable") and d.get("name","").startswith("iPhone"):
+                      choices.append((runtime, d["name"], d["udid"]))
+          if not choices:
+              raise SystemExit("No available iPhone simulator")
+          choices.sort(reverse=True)
+          print(choices[0][2])
+          ')"
+
+          echo "Using simulator: $SIM_UDID"
+          xcrun simctl boot "$SIM_UDID" || true
+          xcrun simctl bootstatus "$SIM_UDID" -b
+
+          openssl req             -x509             -newkey rsa:2048             -sha256             -nodes             -keyout build/mock-webdav/key.pem             -out build/mock-webdav/cert.pem             -days 1             -subj '/CN=localhost'             >/dev/null 2>&1
+
+          python3 Tests/MockWebDAV/mock_webdav.py             --port 8765             --log build/mock-webdav/local.jsonl             --label local             >build/logs/mock-local.log 2>&1 &
+          LOCAL_PID=$!
+
+          python3 Tests/MockWebDAV/mock_webdav.py             --port 8766             --log build/mock-webdav/remote.jsonl             --label remote             --cert build/mock-webdav/cert.pem             --key build/mock-webdav/key.pem             >build/logs/mock-remote.log 2>&1 &
+          REMOTE_PID=$!
+
+          cleanup() {
+            kill "$LOCAL_PID" "$REMOTE_PID" 2>/dev/null || true
+            xcrun simctl shutdown "$SIM_UDID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8765/__health >/dev/null &&
+               curl -kfsS https://127.0.0.1:8766/__health >/dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+
+          curl -fsS http://127.0.0.1:8765/__health
+          curl -kfsS https://127.0.0.1:8766/__health
+
+          xcodebuild             -project FileMann.xcodeproj             -scheme FileMann             -configuration Debug             -destination "platform=iOS Simulator,id=$SIM_UDID"             -derivedDataPath "$PWD/build/TestDerivedData"             -resultBundlePath "$PWD/build/test-results/FileMann.xcresult"             test 2>&1 | tee build/logs/xcode-test.log
+
+          python3 Tests/MockWebDAV/assert_requests.py             --local-log build/mock-webdav/local.jsonl             --remote-log build/mock-webdav/remote.jsonl
 
       - name: Build unsigned device app
         run: |
           set -euo pipefail
           set -o pipefail
           mkdir -p build/logs
-          xcodebuild \
-            -project FileMann.xcodeproj \
-            -scheme FileMann \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$PWD/build/DeviceDerivedData" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY='' \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
-            build 2>&1 | tee build/logs/xcodebuild.log
+          xcodebuild             -project FileMann.xcodeproj             -scheme FileMann             -configuration Release             -sdk iphoneos             -destination 'generic/platform=iOS'             -derivedDataPath "$PWD/build/DeviceDerivedData"             CODE_SIGNING_ALLOWED=NO             CODE_SIGNING_REQUIRED=NO             CODE_SIGN_IDENTITY=''             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"             build 2>&1 | tee build/logs/xcodebuild.log
 
       - name: Validate unsigned app
         run: |
@@ -80,12 +124,11 @@ jobs:
           lipo -archs "$EXECUTABLE" | tr ' ' '\n' | grep -qx 'arm64'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'com.masakacj.filemann'
           test "$(/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$APP_PATH/Info.plist")" = 'true'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :UIUserInterfaceStyle' "$APP_PATH/Info.plist")" = 'Dark'
           /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$APP_PATH/Info.plist" | grep -qx 'filemann'
           test -f "$APP_PATH/Frameworks/AMSMB2.framework/AMSMB2"
           otool -L "$EXECUTABLE" | grep -q '@rpath/AMSMB2.framework/AMSMB2'
-
           test ! -e "$APP_PATH/PlugIns/FileMannShare.appex"
-
           test ! -e "$APP_PATH/_CodeSignature"
 
       - name: Package unsigned IPA
@@ -102,7 +145,24 @@ jobs:
           )
           test -s "$PWD/build/FileMann-unsigned.ipa"
 
-      - name: Publish latest unsigned IPA
+      - name: Validate packaged IPA
+        run: |
+          set -euo pipefail
+          VERIFY_ROOT="$PWD/build/verify-ipa"
+          rm -rf "$VERIFY_ROOT"
+          mkdir -p "$VERIFY_ROOT"
+          unzip -q "$PWD/build/FileMann-unsigned.ipa" -d "$VERIFY_ROOT"
+
+          APP="$VERIFY_ROOT/Payload/FileMann.app"
+          test -d "$APP"
+          test -f "$APP/FileMann"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")" = 'com.masakacj.filemann'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :UIUserInterfaceStyle' "$APP/Info.plist")" = 'Dark'
+          test ! -e "$APP/PlugIns/FileMannShare.appex"
+          test ! -e "$APP/_CodeSignature"
+          shasum -a 256 "$PWD/build/FileMann-unsigned.ipa"
+
+      - name: Publish latest verified unsigned IPA
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -111,24 +171,18 @@ jobs:
           IPA="$PWD/build/FileMann-unsigned.ipa"
           test -f "$IPA"
 
-          gh release delete latest \
-            --repo "$GITHUB_REPOSITORY" \
-            --cleanup-tag \
-            --yes || true
+          gh release delete latest             --repo "$GITHUB_REPOSITORY"             --cleanup-tag             --yes || true
 
-          gh release create latest \
-            "$IPA#FileMann-unsigned.ipa" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "FileMann Latest Unsigned IPA" \
-            --notes "Unsigned arm64 iOS build for self-signing. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER" \
-            --latest
+          gh release create latest             "$IPA#FileMann-unsigned.ipa"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "FileMann Latest Verified Unsigned IPA"             --notes "Verified unsigned arm64 iOS build. Unit tests, UI smoke tests, local WebDAV, remote fallback, self-signed HTTPS compatibility, HTTP Range thumbnail checks, and IPA validation passed. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER"             --latest
 
-      - name: Upload Xcode build log on failure
+      - name: Upload diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: FileMann-xcodebuild-log
-          path: build/logs/xcodebuild.log
+          name: FileMann-ci-diagnostics
+          path: |
+            build/logs
+            build/mock-webdav
+            build/test-results
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 3
