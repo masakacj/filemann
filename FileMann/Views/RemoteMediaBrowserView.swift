@@ -328,14 +328,8 @@ struct RemoteMediaBrowserView: View {
                             baseURLString:
                                 viewModel.resolvedBaseURL,
                             targetSize: CGSize(
-                                width: max(
-                                    180,
-                                    proxy.size.width * 2
-                                ),
-                                height: max(
-                                    180,
-                                    proxy.size.width * 2
-                                )
+                                width: proxy.size.width,
+                                height: proxy.size.width
                             )
                         )
                         .frame(
