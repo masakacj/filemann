@@ -71,7 +71,7 @@ struct SettingsView: View {
                     }
                 } footer: {
                     if viewModel.settings.transport == .webDAV {
-                        Text("QNAP 可使用 WebDAV。例如 http://NAS_IP:5000/共享名 或配置可信证书后的 https://NAS:5001/共享名。HTTP 仅建议在可信局域网使用。")
+                        Text("本地地址用于家中局域网，远程地址用于外网。FileMann 会优先本地、失败后自动尝试远程。远程 WebDAV 建议只使用可信 HTTPS；HTTP 仅建议在可信局域网使用。")
                     } else {
                         Text("共享名是 SMB 第一层 share，例如 \\NAS\\storage。")
                     }
@@ -102,12 +102,24 @@ struct SettingsView: View {
     private var webDAVSection: some View {
         Section("QNAP WebDAV") {
             TextField(
-                "例如 http://192.168.1.10:5000/Archive",
+                "本地地址，例如 http://192.168.1.10:5000/Archive",
                 text: $viewModel.settings.webDAVBaseURL
             )
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(.URL)
+
+            TextField(
+                "远程地址，例如 https://nas.example.com/Archive",
+                text: $viewModel.settings.webDAVRemoteBaseURL
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.URL)
+
+            Text("连接时始终先尝试本地地址；本地不可达时自动切换远程地址。远程地址建议使用可信 HTTPS。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             TextField("用户名", text: $viewModel.settings.webDAVUsername)
                 .textInputAutocapitalization(.never)
