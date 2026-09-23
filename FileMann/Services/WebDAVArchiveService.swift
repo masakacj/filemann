@@ -10,6 +10,7 @@ enum WebDAVArchiveError: LocalizedError {
     case sourceUnavailable
     case sourceChanged
     case invalidResponse
+    case certificateRejected(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +30,8 @@ enum WebDAVArchiveError: LocalizedError {
             return "源文件已发生变化，请重新加入任务"
         case .invalidResponse:
             return "WebDAV 返回内容无法解析"
+        case .certificateRejected(let host):
+            return "HTTPS 证书校验失败（\(host)）。如果这是你自己的 NAS 自签证书，可在该 WebDAV 的“高级”中开启“兼容自签/无效证书”。"
         }
     }
 }
@@ -148,11 +151,35 @@ final class WebDAVArchiveService {
                 )
                 return candidate
             } catch {
-                lastError = error
+                if Self.isCertificateError(error) {
+                    lastError = WebDAVArchiveError.certificateRejected(
+                        URL(string: candidate)?.host
+                            ?? candidate
+                    )
+                } else {
+                    lastError = error
+                }
             }
         }
 
         throw lastError ?? WebDAVArchiveError.noReachableEndpoint
+    }
+
+    private static func isCertificateError(
+        _ error: Error
+    ) -> Bool {
+        let value = error as NSError
+        guard value.domain == NSURLErrorDomain else {
+            return false
+        }
+
+        return [
+            -1200,
+            -1201,
+            -1202,
+            -1203,
+            -1204
+        ].contains(value.code)
     }
 
     private static func probe(
