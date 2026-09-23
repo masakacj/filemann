@@ -340,6 +340,13 @@ private struct WebDAVEndpointEditor: View {
                     "HTTPS",
                     isOn: httpsBinding
                 )
+
+                if httpsBinding.wrappedValue {
+                    Toggle(
+                        "兼容自签/无效证书",
+                        isOn: invalidCertificateBinding
+                    )
+                }
             }
 
             Section {
@@ -352,8 +359,8 @@ private struct WebDAVEndpointEditor: View {
             } footer: {
                 Text(
                     endpoint == .local
-                        ? "本地地址用于家中局域网，支持自定义端口。"
-                        : "远程地址用于外网访问，建议开启 HTTPS 并使用与主机名匹配的有效证书。"
+                        ? "本地地址用于家中局域网，支持自定义端口。若 NAS 使用自签证书或证书与 IP 不匹配，可开启“兼容自签/无效证书”。"
+                        : "远程地址用于外网访问，优先使用有效 HTTPS 证书。只有确认这是你自己的 NAS 时，才建议开启“兼容自签/无效证书”。"
                 )
             }
         }
@@ -443,6 +450,23 @@ private struct WebDAVEndpointEditor: View {
                     settings.webDAVLocalHTTPS = value
                 } else {
                     settings.webDAVRemoteHTTPS = value
+                }
+            }
+        )
+    }
+
+    private var invalidCertificateBinding: Binding<Bool> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalAllowInvalidCertificate
+                    : settings.webDAVRemoteAllowInvalidCertificate
+            },
+            set: { value in
+                if endpoint == .local {
+                    settings.webDAVLocalAllowInvalidCertificate = value
+                } else {
+                    settings.webDAVRemoteAllowInvalidCertificate = value
                 }
             }
         )
