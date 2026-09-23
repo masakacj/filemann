@@ -147,9 +147,100 @@ final class WebDAVBackgroundUploadManager: NSObject {
             ]
         )
     }
+
+    private func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        baseURLString: String?,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        let settings = TaskStore.loadSettings()
+        let password = KeychainStore.loadWebDAVPassword()
+
+        let candidate: String? = {
+            if let baseURLString {
+                return baseURLString
+            }
+
+            return settings.webDAVCandidateBaseURLs
+                .first { value in
+                    let endpoint =
+                        WebDAVChallengeHandler.endpoint(
+                            from: value
+                        )
+
+                    return endpoint.host?
+                        .caseInsensitiveCompare(
+                            challenge.protectionSpace.host
+                        ) == .orderedSame &&
+                        endpoint.port ==
+                            challenge.protectionSpace.port
+                }
+        }()
+
+        guard let candidate else {
+            completionHandler(
+                .performDefaultHandling,
+                nil
+            )
+            return
+        }
+
+        let endpoint =
+            WebDAVChallengeHandler.endpoint(
+                from: candidate
+            )
+
+        WebDAVChallengeHandler.handle(
+            challenge: challenge,
+            username: settings.webDAVUsername,
+            password: password,
+            allowInvalidCertificate:
+                settings.webDAVAllowsInvalidCertificate(
+                    for: candidate
+                ),
+            trustedHost: endpoint.host,
+            trustedPort: endpoint.port,
+            completionHandler: completionHandler
+        )
+    }
 }
 
 extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDelegate {
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        handleChallenge(
+            challenge,
+            baseURLString: nil,
+            completionHandler: completionHandler
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        handleChallenge(
+            challenge,
+            baseURLString:
+                descriptor(for: task)?.baseURLString,
+            completionHandler: completionHandler
+        )
+    }
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
