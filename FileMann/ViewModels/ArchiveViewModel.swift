@@ -9,6 +9,7 @@ final class ArchiveViewModel: ObservableObject {
     @Published var lastVerification: BatchVerification?
     @Published var settings: SMBSettings
     @Published var password: String
+    @Published var webDAVPassword: String
 
     @Published var isRunning = false
     @Published var isScanningLocation = false
@@ -24,6 +25,7 @@ final class ArchiveViewModel: ObservableObject {
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var speedSampleDate = Date()
     private var speedSampleBytes: Int64 = 0
+    private var notificationObservers: [NSObjectProtocol] = []
 
     init() {
         self.tasks = TaskStore.loadTasks().map { task in
@@ -38,9 +40,22 @@ final class ArchiveViewModel: ObservableObject {
         self.lastVerification = TaskStore.loadVerification()
         self.settings = TaskStore.loadSettings()
         self.password = KeychainStore.loadPassword()
+        self.webDAVPassword = KeychainStore.loadWebDAVPassword()
 
         let validTaskIDs = Set(tasks.map(\.id))
         self.duplicateCandidates.removeAll { !validTaskIDs.contains($0.taskID) }
+
+        installWebDAVObservers()
+
+        Task { [weak self] in
+            await self?.restoreWebDAVBackgroundTasks()
+        }
+    }
+
+    deinit {
+        for observer in notificationObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     var totalBytes: Int64 {
@@ -213,28 +228,55 @@ final class ArchiveViewModel: ObservableObject {
         TaskStore.saveSettings(settings)
         do {
             try KeychainStore.savePassword(password)
-            statusMessage = "SMB 设置已保存"
+            try KeychainStore.saveWebDAVPassword(webDAVPassword)
+            statusMessage = "归档设置已保存"
         } catch {
             statusMessage = "密码保存失败：\(error.localizedDescription)"
         }
     }
 
     func chooseRemoteDirectory(_ path: String) {
-        settings.remoteDirectory = path
+        switch settings.transport {
+        case .webDAV:
+            settings.webDAVRemoteDirectory = path
+        case .smb:
+            settings.remoteDirectory = path
+        }
         saveSettings()
     }
 
     func loadRemoteDirectories(at path: String) async throws -> [SMBDirectoryEntry] {
-        let service = try SMBArchiveService(settings: settings, password: password)
-        return try await service.listDirectories(at: path)
+        switch settings.transport {
+        case .webDAV:
+            let service = try WebDAVArchiveService(
+                settings: settings,
+                password: webDAVPassword
+            )
+            return try await service.listDirectories(at: path)
+        case .smb:
+            let service = try SMBArchiveService(settings: settings, password: password)
+            return try await service.listDirectories(at: path)
+        }
     }
 
     func testConnection() {
         connectionTestMessage = "连接中…"
         Task {
             do {
-                let service = try SMBArchiveService(settings: settings, password: password)
-                try await service.testConnection()
+                switch settings.transport {
+                case .webDAV:
+                    let service = try WebDAVArchiveService(
+                        settings: settings,
+                        password: webDAVPassword
+                    )
+                    try await service.testConnection()
+                case .smb:
+                    let service = try SMBArchiveService(
+                        settings: settings,
+                        password: password
+                    )
+                    try await service.testConnection()
+                }
                 connectionTestMessage = "连接成功"
             } catch {
                 connectionTestMessage = "连接失败：\(error.localizedDescription)"
@@ -262,6 +304,12 @@ final class ArchiveViewModel: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
+
+        if settings.transport == .webDAV {
+            startWebDAV()
+            return
+        }
+
         guard settings.isValid else {
             statusMessage = "请先配置 SMB 服务器和共享名"
             isShowingSettings = true
@@ -298,6 +346,17 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func pause() {
+        if settings.transport == .webDAV {
+            WebDAVBackgroundUploadManager.shared.suspendAll()
+            isRunning = false
+            for index in tasks.indices where tasks[index].state == .uploading {
+                tasks[index].state = .paused
+            }
+            persistTasks()
+            statusMessage = "后台上传已暂停，可稍后继续"
+            return
+        }
+
         worker?.cancel()
         worker = nil
         isRunning = false
@@ -319,6 +378,9 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func removeTask(_ task: ArchiveTask) {
+        if settings.transport == .webDAV {
+            WebDAVBackgroundUploadManager.shared.cancel(taskID: task.id)
+        }
         tasks.removeAll { $0.id == task.id }
         duplicateCandidates.removeAll { $0.taskID == task.id }
         invalidateVerification()
@@ -336,6 +398,390 @@ final class ArchiveViewModel: ObservableObject {
 
     func task(for candidate: DuplicateCandidate) -> ArchiveTask? {
         tasks.first { $0.id == candidate.taskID }
+    }
+
+    private func startWebDAV() {
+        guard settings.isValid else {
+            statusMessage = "请先配置 QNAP WebDAV 地址"
+            isShowingSettings = true
+            return
+        }
+
+        if unresolvedDuplicateCount > 0 {
+            isShowingDuplicateReview = true
+            statusMessage = "请先处理 \(unresolvedDuplicateCount) 个重复文件"
+            return
+        }
+
+        saveSettings()
+
+        for index in tasks.indices {
+            if tasks[index].state == .failed ||
+                tasks[index].state == .paused ||
+                tasks[index].state == .missingSource {
+                tasks[index].state = .queued
+                tasks[index].errorMessage = nil
+            }
+        }
+        persistTasks()
+
+        isRunning = true
+        speedSampleDate = Date()
+        speedSampleBytes = transferredBytes
+        bytesPerSecond = 0
+
+        Task {
+            do {
+                let service = try WebDAVArchiveService(
+                    settings: settings,
+                    password: webDAVPassword
+                )
+                try await service.connectAndPrepare()
+
+                let foundNewDuplicates = try await scanForDuplicates(using: service)
+                if foundNewDuplicates || unresolvedDuplicateCount > 0 {
+                    isShowingDuplicateReview = true
+                    isRunning = false
+                    statusMessage = "发现 \(unresolvedDuplicateCount) 个内容完全相同的文件，请先选择保留方式"
+                    return
+                }
+
+                try await applyResolvedDuplicates(using: service)
+
+                let manager = WebDAVBackgroundUploadManager.shared
+                let existingTaskIDs = await manager.activeTaskIDs()
+                manager.resumeAll()
+
+                var scheduled = 0
+                for index in tasks.indices {
+                    guard tasks[index].state != .completed,
+                          tasks[index].state != .skipped else {
+                        continue
+                    }
+
+                    let taskID = tasks[index].id
+                    if existingTaskIDs.contains(taskID) {
+                        tasks[index].state = .uploading
+                        continue
+                    }
+
+                    do {
+                        let snapshot = tasks[index]
+                        let sourceURL = try resolveBookmark(snapshot.bookmark)
+                        let finalPath = service.desiredRemotePath(for: snapshot)
+
+                        if await service.remoteFileSize(atPath: finalPath) != nil {
+                            tasks[index].state = .failed
+                            tasks[index].errorMessage =
+                                "NAS 上已存在同路径但未通过 byte-to-byte 重复校验的文件"
+                            continue
+                        }
+
+                        try await service.prepareParentDirectory(for: finalPath)
+
+                        let partialPath =
+                            finalPath + ".filemann-" + taskID.uuidString.lowercased() + ".partial"
+                        let request = try service.makeUploadRequest(path: partialPath)
+
+                        try manager.schedule(
+                            taskID: taskID,
+                            sourceURL: sourceURL,
+                            request: request,
+                            partialPath: partialPath,
+                            finalPath: finalPath,
+                            expectedBytes: snapshot.fileSize
+                        )
+
+                        tasks[index].state = .uploading
+                        tasks[index].errorMessage = "iOS 后台上传中"
+                        scheduled += 1
+                    } catch {
+                        tasks[index].state = isSourceAccessError(error)
+                            ? .missingSource
+                            : .failed
+                        tasks[index].errorMessage = error.localizedDescription
+                    }
+                }
+
+                persistTasks()
+
+                if scheduled > 0 || tasks.contains(where: { $0.state == .uploading }) {
+                    statusMessage = "已交给 iOS 后台上传；可以锁屏或切换到其他 App"
+                } else {
+                    await finishWebDAVBatchIfPossible()
+                }
+            } catch is CancellationError {
+                isRunning = false
+                statusMessage = "已暂停"
+            } catch {
+                isRunning = false
+                statusMessage = "WebDAV 处理失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func scanForDuplicates(using service: WebDAVArchiveService) async throws -> Bool {
+        let knownTaskIDs = Set(duplicateCandidates.map(\.taskID))
+        let candidates = tasks.filter {
+            $0.state != .completed &&
+            $0.state != .skipped &&
+            !knownTaskIDs.contains($0.id)
+        }
+
+        guard !candidates.isEmpty else { return false }
+
+        var found = false
+        for (offset, task) in candidates.enumerated() {
+            try Task.checkCancellation()
+            statusMessage =
+                "正在通过 WebDAV 检查重复文件 \(offset + 1)/\(candidates.count)：\(task.displayName)"
+
+            do {
+                let sourceURL = try resolveBookmark(task.bookmark)
+                if let remote = try await service.findExactDuplicate(
+                    task: task,
+                    sourceURL: sourceURL
+                ) {
+                    duplicateCandidates.append(
+                        DuplicateCandidate(
+                            taskID: task.id,
+                            remotePath: remote.path,
+                            remoteName: remote.name,
+                            fileSize: remote.size
+                        )
+                    )
+                    found = true
+                    persistDuplicates()
+                }
+            } catch WebDAVArchiveError.sourceUnavailable {
+                if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+                    tasks[index].state = .missingSource
+                    tasks[index].errorMessage =
+                        WebDAVArchiveError.sourceUnavailable.localizedDescription
+                }
+            }
+        }
+
+        return found
+    }
+
+    private func applyResolvedDuplicates(using service: WebDAVArchiveService) async throws {
+        for candidate in duplicateCandidates where candidate.decision != .unresolved {
+            guard let index = tasks.firstIndex(where: { $0.id == candidate.taskID }),
+                  tasks[index].state != .completed,
+                  tasks[index].state != .skipped else {
+                continue
+            }
+
+            switch candidate.decision {
+            case .unresolved:
+                break
+
+            case .keepNAS:
+                tasks[index].state = .completed
+                tasks[index].transferredBytes = tasks[index].fileSize
+                tasks[index].remoteVerifiedPath = candidate.remotePath
+                tasks[index].shouldDeleteSource = true
+                tasks[index].errorMessage =
+                    "重复文件：使用 NAS 已有副本，整批校验后删除手机副本"
+
+            case .keepPhone:
+                try await service.deleteRemoteFile(at: candidate.remotePath)
+                tasks[index].state = .skipped
+                tasks[index].transferredBytes = 0
+                tasks[index].shouldDeleteSource = false
+                tasks[index].errorMessage =
+                    "重复文件：已删除 NAS 副本，仅保留手机文件"
+
+            case .keepBoth:
+                tasks[index].state = .completed
+                tasks[index].transferredBytes = tasks[index].fileSize
+                tasks[index].remoteVerifiedPath = candidate.remotePath
+                tasks[index].shouldDeleteSource = false
+                tasks[index].errorMessage =
+                    "重复文件：两边都保留，不重复上传"
+            }
+
+            persistTasks()
+        }
+    }
+
+    private func installWebDAVObservers() {
+        let center = NotificationCenter.default
+
+        notificationObservers.append(
+            center.addObserver(
+                forName: .fileMannWebDAVProgress,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let taskID = note.userInfo?["taskID"] as? UUID,
+                      let sent = note.userInfo?["sent"] as? Int64 else {
+                    return
+                }
+
+                Task { @MainActor in
+                    self?.isRunning = true
+                    if let index = self?.tasks.firstIndex(where: { $0.id == taskID }) {
+                        self?.tasks[index].state = .uploading
+                        self?.tasks[index].errorMessage = "iOS 后台上传中"
+                    }
+                    self?.updateProgress(id: taskID, bytes: sent)
+                    self?.persistTasks()
+                }
+            }
+        )
+
+        notificationObservers.append(
+            center.addObserver(
+                forName: .fileMannWebDAVCompleted,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let taskID = note.userInfo?["taskID"] as? UUID,
+                      let remotePath = note.userInfo?["remotePath"] as? String,
+                      let remoteSize = note.userInfo?["remoteSize"] as? Int64 else {
+                    return
+                }
+
+                Task { @MainActor in
+                    guard let self,
+                          let index = self.tasks.firstIndex(where: { $0.id == taskID }) else {
+                        return
+                    }
+
+                    self.tasks[index].transferredBytes = remoteSize
+                    self.tasks[index].remoteVerifiedPath = remotePath
+                    self.tasks[index].state = .completed
+                    self.tasks[index].errorMessage = "NAS 已落盘并通过文件大小校验"
+                    self.persistTasks()
+                    await self.finishWebDAVBatchIfPossible()
+                }
+            }
+        )
+
+        notificationObservers.append(
+            center.addObserver(
+                forName: .fileMannWebDAVFailed,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                guard let taskID = note.userInfo?["taskID"] as? UUID,
+                      let message = note.userInfo?["message"] as? String else {
+                    return
+                }
+
+                Task { @MainActor in
+                    guard let self,
+                          let index = self.tasks.firstIndex(where: { $0.id == taskID }) else {
+                        return
+                    }
+
+                    self.tasks[index].state = .failed
+                    self.tasks[index].errorMessage = "后台上传失败：\(message)"
+                    self.persistTasks()
+
+                    if !self.tasks.contains(where: { $0.state == .uploading }) {
+                        self.isRunning = false
+                    }
+                    self.statusMessage = "有后台上传失败，点“继续归档”重试"
+                }
+            }
+        )
+    }
+
+    private func restoreWebDAVBackgroundTasks() async {
+        guard settings.transport == .webDAV else { return }
+
+        let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
+        guard !active.isEmpty else { return }
+
+        for index in tasks.indices where active.contains(tasks[index].id) {
+            tasks[index].state = .uploading
+            tasks[index].errorMessage = "iOS 后台上传中"
+        }
+        isRunning = true
+        persistTasks()
+    }
+
+    private func finishWebDAVBatchIfPossible() async {
+        guard settings.transport == .webDAV else { return }
+
+        if tasks.contains(where: {
+            $0.state == .uploading ||
+            $0.state == .queued ||
+            $0.state == .paused
+        }) {
+            return
+        }
+
+        isRunning = false
+
+        if tasks.contains(where: {
+            $0.state == .failed || $0.state == .missingSource
+        }) {
+            statusMessage = "部分文件未完成，未执行整批删除"
+            return
+        }
+
+        do {
+            let service = try WebDAVArchiveService(
+                settings: settings,
+                password: webDAVPassword
+            )
+
+            let verification = await service.verifyManifest(tasks)
+            lastVerification = verification
+            TaskStore.saveVerification(verification)
+
+            guard verification.passed else {
+                statusMessage =
+                    "WebDAV 整批校验失败：清单 \(verification.expectedCount) 个 / " +
+                    "\(ByteFormat.string(verification.expectedBytes))，NAS 已确认 " +
+                    "\(verification.verifiedCount) 个 / " +
+                    "\(ByteFormat.string(verification.verifiedBytes))。未删除手机源文件。"
+                return
+            }
+
+            if settings.deleteAfterArchive {
+                var deletionFailures = 0
+
+                for index in tasks.indices {
+                    guard tasks[index].state == .completed,
+                          !tasks[index].sourceDeleted,
+                          tasks[index].shouldDeleteSource != false else {
+                        continue
+                    }
+
+                    do {
+                        let sourceURL = try resolveBookmark(tasks[index].bookmark)
+                        try service.deleteSourceFile(at: sourceURL)
+                        tasks[index].sourceDeleted = true
+                    } catch {
+                        deletionFailures += 1
+                        tasks[index].errorMessage =
+                            "NAS 整批校验已通过，但本地文件删除失败：\(error.localizedDescription)"
+                    }
+
+                    persistTasks()
+                }
+
+                if deletionFailures == 0 {
+                    statusMessage =
+                        "后台归档完成并通过整批校验：\(verification.verifiedCount) 个 / " +
+                        "\(ByteFormat.string(verification.verifiedBytes))。本地副本已按设置删除。"
+                } else {
+                    statusMessage =
+                        "后台归档与整批校验通过，但有 \(deletionFailures) 个本地文件删除失败。"
+                }
+            } else {
+                statusMessage =
+                    "后台归档完成并通过整批校验：\(verification.verifiedCount) 个 / " +
+                    "\(ByteFormat.string(verification.verifiedBytes))。本地副本已保留。"
+            }
+        } catch {
+            statusMessage = "WebDAV 整批校验失败：\(error.localizedDescription)"
+        }
     }
 
     private func runQueue() async {
