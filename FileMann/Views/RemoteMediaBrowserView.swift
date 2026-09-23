@@ -11,13 +11,16 @@ struct RemoteMediaBrowserView: View {
 
     private let settings: SMBSettings
     private let password: String
+    private let showsDismissButton: Bool
 
     init(
         settings: SMBSettings,
-        password: String
+        password: String,
+        showsDismissButton: Bool = true
     ) {
         self.settings = settings
         self.password = password
+        self.showsDismissButton = showsDismissButton
         _viewModel = StateObject(
             wrappedValue: RemoteMediaBrowserViewModel(
                 settings: settings,
@@ -116,11 +119,13 @@ struct RemoteMediaBrowserView: View {
                 .background(.thinMaterial)
             }
             .toolbar {
-                ToolbarItem(
-                    placement: .cancellationAction
-                ) {
-                    Button("完成") {
-                        dismiss()
+                if showsDismissButton {
+                    ToolbarItem(
+                        placement: .cancellationAction
+                    ) {
+                        Button("完成") {
+                            dismiss()
+                        }
                     }
                 }
 

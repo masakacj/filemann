@@ -18,7 +18,6 @@ struct MediaLibraryView: View {
     @State private var presentedItem: MediaItem?
     @State private var showDeleteConfirmation = false
     @State private var showPhotoPicker = false
-    @State private var showRemoteBrowser = false
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: CGFloat(thumbnailSize)), spacing: 2)]
@@ -97,16 +96,6 @@ struct MediaLibraryView: View {
                             viewModel.clearSelection()
                         }
                     } else {
-                        if archiveViewModel.settings.transport == .webDAV,
-                           archiveViewModel.settings.isValid {
-                            Button {
-                                showRemoteBrowser = true
-                            } label: {
-                                Image(systemName: "externaldrive.badge.icloud")
-                            }
-                            .accessibilityLabel("浏览 NAS 媒体")
-                        }
-
                         Button {
                             showPhotoPicker = true
                         } label: {
@@ -225,12 +214,6 @@ struct MediaLibraryView: View {
                     deleteOriginalsAfterImport: deletePhotosAfterImport
                 )
             }
-        }
-        .sheet(isPresented: $showRemoteBrowser) {
-            RemoteMediaBrowserView(
-                settings: archiveViewModel.settings,
-                password: archiveViewModel.webDAVPassword
-            )
         }
         .sheet(isPresented: $archiveViewModel.isShowingSettings) {
             SettingsView()
