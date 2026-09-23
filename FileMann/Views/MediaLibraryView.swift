@@ -131,12 +131,6 @@ struct MediaLibraryView: View {
                             }
 
                             Section("归档") {
-                                Button {
-                                    archiveViewModel.isShowingSettings = true
-                                } label: {
-                                    Label("SMB / NAS 设置", systemImage: "externaldrive")
-                                }
-
                                 if !archiveViewModel.duplicateCandidates.isEmpty {
                                     Button {
                                         archiveViewModel.isShowingDuplicateReview = true
@@ -172,6 +166,13 @@ struct MediaLibraryView: View {
                             Image(systemName: "ellipsis.circle")
                         }
                     }
+
+                    Button {
+                        archiveViewModel.isShowingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("设置")
                 }
             }
             .safeAreaInset(edge: .top) {
