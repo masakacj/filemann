@@ -18,9 +18,14 @@ struct SMBDirectoryPickerView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(path.isEmpty ? "/" : "/\(path)")
                                 .font(.body.monospaced())
-                            Text("Share: \(viewModel.settings.normalizedShare)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Text(
+                                viewModel.settings.transport == .webDAV
+                                    ? "WebDAV: \(viewModel.settings.normalizedWebDAVBaseURL)"
+                                    : "Share: \(viewModel.settings.normalizedShare)"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                         }
                     }
                 }
@@ -83,7 +88,7 @@ struct SMBDirectoryPickerView: View {
                 }
             }
             .task {
-                path = viewModel.settings.normalizedDirectory
+                path = viewModel.settings.activeRemoteDirectory
                 await load()
             }
         }
@@ -91,7 +96,9 @@ struct SMBDirectoryPickerView: View {
 
     private func load() async {
         guard viewModel.settings.isValid else {
-            errorMessage = "请先填写服务器和共享名"
+            errorMessage = viewModel.settings.transport == .webDAV
+                ? "请先填写 WebDAV 地址"
+                : "请先填写服务器和共享名"
             directories = []
             return
         }
