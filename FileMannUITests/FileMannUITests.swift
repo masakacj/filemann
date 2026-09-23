@@ -39,6 +39,40 @@ final class FileMannUITests: XCTestCase {
         )
     }
 
+    func testLocalLibraryUsesExternalFolderWorkflow() {
+        let app = XCUIApplication()
+        configureBaseEnvironment(app)
+        app.launch()
+
+        XCTAssertFalse(
+            app.buttons["从相册导入"].exists,
+            "本地媒体页不应再显示从相册导入按钮"
+        )
+
+        let moreButton = app.buttons["更多"].firstMatch
+        XCTAssertTrue(
+            moreButton.waitForExistence(timeout: 5)
+        )
+        moreButton.tap()
+
+        XCTAssertTrue(
+            app.buttons["映射外部文件夹"]
+                .waitForExistence(timeout: 3),
+            "更多菜单应提供外部文件夹映射入口"
+        )
+
+        XCTAssertFalse(
+            app.switches[
+                "FileMann 导入后清理相册原件"
+            ].exists
+        )
+        XCTAssertFalse(
+            app.switches[
+                "快捷指令复制后询问删除相册原件"
+            ].exists
+        )
+    }
+
     func testLocalWebDAVIsPreferredAndThumbnailsLoad() {
         let app = XCUIApplication()
         configureBaseEnvironment(app)
