@@ -65,7 +65,7 @@ struct ZoomablePlayerView: UIViewRepresentable {
                 action: #selector(handleLongPress(_:))
             )
             longPress.minimumPressDuration = 0.28
-            longPress.allowableMovement = 200
+            longPress.allowableMovement = 10_000
             longPress.delegate = self
             view.addGestureRecognizer(longPress)
         }
