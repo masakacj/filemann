@@ -36,7 +36,10 @@ private struct RemoteMediaTabView: View {
                 RemoteMediaBrowserView(
                     settings: archiveViewModel.settings,
                     password: archiveViewModel.webDAVPassword,
-                    showsDismissButton: false
+                    showsDismissButton: false,
+                    onSettings: {
+                        archiveViewModel.isShowingSettings = true
+                    }
                 )
                 .id(identity)
             } else {
@@ -55,6 +58,18 @@ private struct RemoteMediaTabView: View {
                         .buttonStyle(.borderedProminent)
                     }
                     .navigationTitle("NAS")
+                    .toolbar {
+                        ToolbarItem(
+                            placement: .topBarTrailing
+                        ) {
+                            Button {
+                                archiveViewModel.isShowingSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                            }
+                            .accessibilityLabel("设置")
+                        }
+                    }
                 }
             }
         }
