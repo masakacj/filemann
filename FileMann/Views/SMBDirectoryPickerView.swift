@@ -20,7 +20,7 @@ struct SMBDirectoryPickerView: View {
                                 .font(.body.monospaced())
                             Text(
                                 viewModel.settings.transport == .webDAV
-                                    ? "WebDAV: \(viewModel.settings.normalizedWebDAVBaseURL)"
+                                    ? "WebDAV：优先本地，失败切远程"
                                     : "Share: \(viewModel.settings.normalizedShare)"
                             )
                             .font(.caption)
