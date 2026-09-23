@@ -55,6 +55,13 @@ struct RemoteMediaThumbnailView: View {
             }
         }
         .clipped()
+        .accessibilityElement(children: .ignore)
+        .accessibilityIdentifier(
+            "remote-thumbnail-\(entry.name)"
+        )
+        .accessibilityValue(
+            image == nil ? "loading" : "loaded"
+        )
         .task(id: cacheKey) {
             guard entry.kind == .image ||
                     entry.kind == .video,
