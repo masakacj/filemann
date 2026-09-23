@@ -216,10 +216,6 @@ struct MediaLibraryView: View {
                 )
             }
         }
-        .sheet(isPresented: $archiveViewModel.isShowingSettings) {
-            SettingsView()
-                .environmentObject(archiveViewModel)
-        }
         .sheet(isPresented: $archiveViewModel.isShowingDuplicateReview) {
             DuplicateReviewView()
                 .environmentObject(archiveViewModel)
