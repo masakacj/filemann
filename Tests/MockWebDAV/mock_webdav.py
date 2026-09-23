@@ -70,6 +70,13 @@ class Handler(BaseHTTPRequestHandler):
     def _path(self):
         return unquote(urlparse(self.path).path)
 
+    def _content_type_for_path(self, path):
+        if path.endswith(".mp4"):
+            return "video/mp4"
+        if path.endswith(".jpg") or path.endswith(".jpeg"):
+            return "image/jpeg"
+        return "application/octet-stream"
+
     def _body(self, data, status=200, content_type="application/octet-stream"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -93,9 +100,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        content_type = self._content_type_for_path(path)
         range_header = self.headers.get("Range")
         if not range_header:
-            self._body(data)
+            self._body(
+                data,
+                content_type=content_type
+            )
             return
 
         try:
@@ -111,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self.send_response(206)
-        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Type", content_type)
         self.send_header(
             "Content-Range",
             f"bytes {start}-{end}/{len(data)}"
@@ -131,7 +142,10 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             self.send_error(404)
             return
-        self._body(data)
+        self._body(
+            data,
+            content_type=self._content_type_for_path(path)
+        )
 
     def do_PROPFIND(self):
         self.state.log(self)
