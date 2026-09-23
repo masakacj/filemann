@@ -38,6 +38,8 @@ struct VideoProgressOverlay: View {
                 cornerRadius: 12
             )
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("video-progress-overlay")
         .allowsHitTesting(false)
     }
 
