@@ -27,12 +27,14 @@ struct SMBSettings: Codable, Equatable {
     var webDAVLocalPort: String = ""
     var webDAVLocalPath: String = "/"
     var webDAVLocalHTTPS: Bool = true
+    var webDAVLocalAllowInvalidCertificate: Bool = false
 
     var webDAVRemoteTitle: String = "远程 NAS"
     var webDAVRemoteHost: String = ""
     var webDAVRemotePort: String = ""
     var webDAVRemotePath: String = "/"
     var webDAVRemoteHTTPS: Bool = true
+    var webDAVRemoteAllowInvalidCertificate: Bool = false
 
     // Same NAS account is shared by local and remote endpoints.
     var webDAVUsername: String = ""
@@ -159,6 +161,65 @@ struct SMBSettings: Codable, Equatable {
         return "NAS"
     }
 
+    func webDAVAllowsInvalidCertificate(
+        for baseURLString: String
+    ) -> Bool {
+        let normalized = normalizeWebDAVAddress(
+            baseURLString
+        )
+
+        if normalized == normalizedWebDAVBaseURL {
+            return webDAVLocalAllowInvalidCertificate
+        }
+
+        if normalized == normalizedWebDAVRemoteBaseURL {
+            return webDAVRemoteAllowInvalidCertificate
+        }
+
+        return false
+    }
+
+    func webDAVAllowsInvalidCertificate(
+        host: String,
+        port: Int
+    ) -> Bool {
+        if Self.endpointMatches(
+            urlString: normalizedWebDAVBaseURL,
+            host: host,
+            port: port
+        ) {
+            return webDAVLocalAllowInvalidCertificate
+        }
+
+        if Self.endpointMatches(
+            urlString: normalizedWebDAVRemoteBaseURL,
+            host: host,
+            port: port
+        ) {
+            return webDAVRemoteAllowInvalidCertificate
+        }
+
+        return false
+    }
+
+    private static func endpointMatches(
+        urlString: String,
+        host: String,
+        port: Int
+    ) -> Bool {
+        guard let url = URL(string: urlString),
+              let urlHost = url.host else {
+            return false
+        }
+
+        let scheme = url.scheme?.lowercased()
+        let urlPort = url.port
+            ?? (scheme == "https" ? 443 : 80)
+
+        return urlHost.caseInsensitiveCompare(host) == .orderedSame &&
+            urlPort == port
+    }
+
     static func isValidWebDAVURL(
         _ value: String
     ) -> Bool {
@@ -262,12 +323,14 @@ struct SMBSettings: Codable, Equatable {
         case webDAVLocalPort
         case webDAVLocalPath
         case webDAVLocalHTTPS
+        case webDAVLocalAllowInvalidCertificate
 
         case webDAVRemoteTitle
         case webDAVRemoteHost
         case webDAVRemotePort
         case webDAVRemotePath
         case webDAVRemoteHTTPS
+        case webDAVRemoteAllowInvalidCertificate
 
         case webDAVRemoteDirectory
         case webDAVUsername
@@ -330,6 +393,11 @@ struct SMBSettings: Codable, Equatable {
             forKey: .webDAVLocalHTTPS
         ) ?? true
 
+        webDAVLocalAllowInvalidCertificate = try c.decodeIfPresent(
+            Bool.self,
+            forKey: .webDAVLocalAllowInvalidCertificate
+        ) ?? false
+
         webDAVRemoteTitle = try c.decodeIfPresent(
             String.self,
             forKey: .webDAVRemoteTitle
@@ -354,6 +422,11 @@ struct SMBSettings: Codable, Equatable {
             Bool.self,
             forKey: .webDAVRemoteHTTPS
         ) ?? true
+
+        webDAVRemoteAllowInvalidCertificate = try c.decodeIfPresent(
+            Bool.self,
+            forKey: .webDAVRemoteAllowInvalidCertificate
+        ) ?? false
 
         webDAVRemoteDirectory = try c.decodeIfPresent(
             String.self,
@@ -462,6 +535,10 @@ struct SMBSettings: Codable, Equatable {
             webDAVLocalHTTPS,
             forKey: .webDAVLocalHTTPS
         )
+        try c.encode(
+            webDAVLocalAllowInvalidCertificate,
+            forKey: .webDAVLocalAllowInvalidCertificate
+        )
 
         try c.encode(
             webDAVRemoteTitle,
@@ -482,6 +559,10 @@ struct SMBSettings: Codable, Equatable {
         try c.encode(
             webDAVRemoteHTTPS,
             forKey: .webDAVRemoteHTTPS
+        )
+        try c.encode(
+            webDAVRemoteAllowInvalidCertificate,
+            forKey: .webDAVRemoteAllowInvalidCertificate
         )
 
         try c.encode(
