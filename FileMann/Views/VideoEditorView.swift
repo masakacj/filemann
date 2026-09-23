@@ -3,250 +3,229 @@ import SwiftUI
 struct VideoEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var viewModel: VideoEditorViewModel
+
     @State private var selectedParameterID = "exposure"
-    @State private var wasPlayingBeforeScrub = false
     @State private var showAdjustments = false
-    @State private var longPressFastForwardActive = false
+    @State private var gestureHUD: String?
+    @State private var hudTask: Task<Void, Never>?
 
     init(url: URL) {
         _viewModel = StateObject(wrappedValue: VideoEditorViewModel(url: url))
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button("完成") {
-                    viewModel.pause()
-                    dismiss()
-                }
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
 
-                Spacer()
+            VStack(spacing: 0) {
+                topBar
 
-                Text(viewModel.url.lastPathComponent)
-                    .font(.subheadline)
-                    .lineLimit(1)
-
-                Spacer()
-
-                Color.clear
-                    .frame(width: 44, height: 1)
-            }
-            .padding()
-            .background(.ultraThinMaterial)
-
-            ZStack(alignment: .topTrailing) {
-                Color.black
-
-                ZoomablePlayerView(player: viewModel.player)
-                    .contentShape(Rectangle())
-                    .onLongPressGesture(
-                        minimumDuration: 0.35,
-                        maximumDistance: 60,
-                        pressing: { pressing in
-                            if !pressing, longPressFastForwardActive {
-                                longPressFastForwardActive = false
-                                viewModel.endFastForward()
-                            }
-                        },
-                        perform: {
-                            longPressFastForwardActive = true
-                            viewModel.beginFastForward()
-                        }
-                    )
-
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text("双指局部放大 · 长按 2×")
-                        .font(.caption2)
-                        .padding(7)
-                        .background(.ultraThinMaterial, in: Capsule())
-
-                    if viewModel.isFastForwarding {
-                        Text("2×")
-                            .font(.headline.monospacedDigit())
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                }
-                .padding(10)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            videoControls
-
-            if let error = viewModel.errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
+                ZoomablePlayerView(
+                    player: viewModel.player,
+                    onTap: handleTap,
+                    onLongPressBegan: handleLongPressBegan,
+                    onLongPressChanged: handleLongPressChanged,
+                    onLongPressEnded: handleLongPressEnded
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showAdjustments.toggle()
-                }
-            } label: {
-                HStack {
-                    Label("视频调整", systemImage: "slider.horizontal.3")
-                    Spacer()
-                    Text("仅本次播放")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Image(systemName: showAdjustments ? "chevron.down" : "chevron.up")
-                        .font(.caption)
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-                .contentShape(Rectangle())
+            if let gestureHUD {
+                Text(gestureHUD)
+                    .font(.headline.monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .allowsHitTesting(false)
             }
-            .buttonStyle(.plain)
-            .background(.ultraThinMaterial)
 
             if showAdjustments {
-                AdjustmentPanel(
-                    adjustments: $viewModel.adjustments,
-                    selectedParameterID: $selectedParameterID,
-                    onChange: {
-                        viewModel.adjustmentsDidChange()
-                    },
-                    onReset: {
-                        viewModel.reset()
-                    }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                VStack {
+                    Spacer()
+
+                    AdjustmentPanel(
+                        adjustments: $viewModel.adjustments,
+                        selectedParameterID: $selectedParameterID,
+                        onChange: {
+                            viewModel.adjustmentsDidChange()
+                        },
+                        onReset: {
+                            viewModel.reset()
+                        }
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .ignoresSafeArea(edges: .bottom)
             }
+
+            VStack {
+                Spacer()
+
+                HStack {
+                    Spacer()
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            showAdjustments.toggle()
+                        }
+                    } label: {
+                        Image(systemName: showAdjustments ? "xmark" : "slider.horizontal.3")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 48, height: 48)
+                            .background(.black.opacity(0.58), in: Circle())
+                    }
+                    .accessibilityLabel(showAdjustments ? "关闭视频调整" : "打开视频调整")
+                }
+                .padding(.trailing, 18)
+                .padding(
+                    .bottom,
+                    showAdjustments ? 172 : 18
+                )
+            }
+            .allowsHitTesting(true)
         }
-        .background(Color.black)
         .preferredColorScheme(.dark)
         .onDisappear {
+            hudTask?.cancel()
             viewModel.pause()
         }
     }
 
-    private var videoControls: some View {
-        VStack(spacing: 8) {
-            Slider(
-                value: $viewModel.currentTime,
-                in: 0...max(viewModel.duration, 0.001),
-                onEditingChanged: { editing in
-                    if editing {
-                        wasPlayingBeforeScrub = viewModel.isPlaying
-                        viewModel.pause()
-                    } else {
-                        viewModel.seek(to: viewModel.currentTime)
-                        if wasPlayingBeforeScrub {
-                            viewModel.togglePlayback()
-                        }
-                    }
-                }
-            )
-
-            HStack {
-                Text(timeString(viewModel.currentTime))
-                    .frame(width: 58, alignment: .leading)
-
-                Spacer()
-
-                RepeatFrameButton(direction: -1) {
-                    viewModel.step(-1)
-                }
-
-                Button {
-                    viewModel.togglePlayback()
-                } label: {
-                    Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title3)
-                        .frame(width: 44)
-                }
-
-                RepeatFrameButton(direction: 1) {
-                    viewModel.step(1)
-                }
-
-                Spacer()
-
-                Text("-" + timeString(max(0, viewModel.duration - viewModel.currentTime)))
-                    .frame(width: 58, alignment: .trailing)
-            }
-            .font(.caption.monospacedDigit())
-
-            if viewModel.frameRate > 0 {
-                HStack {
-                    Text(String(format: "%.2f fps", viewModel.frameRate))
-                    Spacer()
-                    Text("帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)")
-                }
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
+    private var topBar: some View {
+        HStack {
+            Button("完成") {
+                viewModel.pause()
+                dismiss()
             }
 
-            Text("点按上一帧/下一帧精确逐帧；按住可连续逐帧")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Spacer()
+
+            Text(viewModel.url.lastPathComponent)
+                .font(.subheadline)
+                .lineLimit(1)
+
+            Spacer()
+
+            Color.clear
+                .frame(width: 44, height: 1)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+        .foregroundStyle(.white)
+        .padding()
+        .background(.black.opacity(0.5))
     }
 
-    private func timeString(_ seconds: Double) -> String {
-        guard seconds.isFinite else { return "0:00" }
-        let value = max(0, Int(seconds.rounded(.down)))
-        return String(format: "%d:%02d", value / 60, value % 60)
-    }
-}
-
-private struct RepeatFrameButton: View {
-    let direction: Int
-    let action: () -> Void
-
-    @State private var repeatTask: Task<Void, Never>?
-
-    var body: some View {
-        Button {
-            action()
-        } label: {
-            Label(
-                direction < 0 ? "上一帧" : "下一帧",
-                systemImage: direction < 0 ? "backward.frame.fill" : "forward.frame.fill"
-            )
-            .labelStyle(.iconOnly)
-            .frame(width: 36, height: 34)
-            .contentShape(Rectangle())
+    private func handleTap(_ region: VideoGestureRegion) {
+        switch region {
+        case .left:
+            viewModel.step(-1)
+            showHUD("−1 帧")
+        case .center:
+            let willPlay = !viewModel.isPlaying
+            viewModel.togglePlayback()
+            showHUD(willPlay ? "播放" : "暂停")
+        case .right:
+            viewModel.step(1)
+            showHUD("+1 帧")
+        case .scrub:
+            break
         }
-        .onLongPressGesture(
-            minimumDuration: 0.35,
-            maximumDistance: 50,
-            pressing: { pressing in
-                if !pressing {
-                    stopRepeating()
-                }
-            },
-            perform: {
-                startRepeating()
-            }
+    }
+
+    private func handleLongPressBegan(
+        _ region: VideoGestureRegion,
+        fraction: CGFloat
+    ) {
+        switch region {
+        case .left:
+            viewModel.beginReverseShuttle()
+            showHUD("1.5× 倒退", persistent: true)
+
+        case .right:
+            viewModel.beginForwardShuttle()
+            showHUD("1.5× 快进", persistent: true)
+
+        case .scrub:
+            viewModel.beginFrameScrub()
+            viewModel.scrubFrames(to: fraction)
+            showScrubHUD()
+
+        case .center:
+            break
+        }
+    }
+
+    private func handleLongPressChanged(
+        _ region: VideoGestureRegion,
+        fraction: CGFloat
+    ) {
+        guard region == .scrub else { return }
+        viewModel.scrubFrames(to: fraction)
+        showScrubHUD()
+    }
+
+    private func handleLongPressEnded(_ region: VideoGestureRegion) {
+        switch region {
+        case .left, .right:
+            viewModel.endShuttle()
+            showHUD(
+                viewModel.isPlaying ? "1× 播放" : "暂停",
+                persistent: false
+            )
+
+        case .scrub:
+            viewModel.endFrameScrub()
+            showHUD(
+                "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)",
+                persistent: false
+            )
+
+        case .center:
+            hideHUD()
+        }
+    }
+
+    private func showScrubHUD() {
+        let seconds = max(0, viewModel.currentTime)
+        let whole = Int(seconds)
+        let milliseconds = Int((seconds - Double(whole)) * 100)
+        let time = String(
+            format: "%d:%02d.%02d",
+            whole / 60,
+            whole % 60,
+            milliseconds
         )
-        .onDisappear {
-            stopRepeating()
-        }
+
+        showHUD(
+            "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)  ·  \(time)",
+            persistent: true
+        )
     }
 
-    private func startRepeating() {
-        stopRepeating()
-        action()
+    private func showHUD(
+        _ text: String,
+        persistent: Bool = false
+    ) {
+        hudTask?.cancel()
+        gestureHUD = text
 
-        repeatTask = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 75_000_000)
-                guard !Task.isCancelled else { break }
-                action()
+        guard !persistent else { return }
+
+        hudTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.16)) {
+                gestureHUD = nil
             }
         }
     }
 
-    private func stopRepeating() {
-        repeatTask?.cancel()
-        repeatTask = nil
+    private func hideHUD() {
+        hudTask?.cancel()
+        withAnimation(.easeOut(duration: 0.16)) {
+            gestureHUD = nil
+        }
     }
 }
