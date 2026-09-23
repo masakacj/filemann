@@ -58,3 +58,45 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+
+  FileMannTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: FileMannTests
+    dependencies:
+      - target: FileMann
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.tests
+        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
+
+  FileMannUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: FileMannUITests
+    dependencies:
+      - target: FileMann
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.uitests
+        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FileMann
+
+schemes:
+  FileMann:
+    build:
+      targets:
+        FileMann: all
+        FileMannTests: [test]
+        FileMannUITests: [test]
+    test:
+      gatherCoverageData: false
+      targets:
+        - FileMannTests
+        - FileMannUITests
