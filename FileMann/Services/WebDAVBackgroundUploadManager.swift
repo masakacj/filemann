@@ -15,7 +15,7 @@ private struct BackgroundUploadDescriptor: Codable {
 
 final class WebDAVBackgroundUploadManager: NSObject {
     static let shared = WebDAVBackgroundUploadManager()
-    static let sessionIdentifier = "tg.unitgqq2709.tool1.filemann.webdav.background"
+    static let sessionIdentifier = "com.masakacj.filemann.webdav.background"
 
     private var backgroundCompletionHandler: (() -> Void)?
     private lazy var session: URLSession = makeSession()

@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainStore {
-    private static let service = "tg.unitgqq2709.tool1.filemann"
+    private static let service = "com.masakacj.filemann"
     private static let smbPasswordAccount = "smb-password"
     private static let webDAVPasswordAccount = "webdav-password"
 

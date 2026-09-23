@@ -24,7 +24,7 @@ targets:
         embed: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: tg.unitgqq2709.tool1
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann
         MARKETING_VERSION: 0.7.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 5.0

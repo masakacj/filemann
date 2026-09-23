@@ -103,13 +103,23 @@ FileMann → 右上角照片+
 FileMann 导入后清理相册原件
 ```
 
-## EasySign
+## 签名与 Bundle ID
 
-Bundle ID：
+FileMann 固定使用独立 Bundle ID：
+
+```
+com.masakacj.filemann
+```
+
+不要再改成 `tg.unitgqq2709.tool1`，因为该 Bundle ID 已被其他 App 使用；iOS 会把相同 Bundle ID 视为同一个 App，从而发生覆盖安装。
+
+你当前上传的 mobileprovision 是精确绑定到：
 
 ```
 tg.unitgqq2709.tool1
 ```
+
+因此这份描述文件不能用于安装当前这个独立 Bundle ID 的 FileMann。需要另一份匹配 `com.masakacj.filemann` 的描述文件，或者允许自定义 Bundle ID 的 wildcard profile。
 
 IPA 不包含 Share Extension，也不依赖 App Group。
 
