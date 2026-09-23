@@ -30,11 +30,25 @@ private struct RemoteMediaTabView: View {
 
     private var identity: String {
         [
+            archiveViewModel.settings.transport.rawValue,
             archiveViewModel.settings.normalizedWebDAVBaseURL,
             archiveViewModel.settings.normalizedWebDAVRemoteBaseURL,
             archiveViewModel.settings.normalizedWebDAVDirectory,
             archiveViewModel.settings.webDAVUsername,
-            archiveViewModel.webDAVPassword
+            archiveViewModel.webDAVPassword,
+            String(
+                archiveViewModel.settings
+                    .webDAVLocalAllowInvalidCertificate
+            ),
+            String(
+                archiveViewModel.settings
+                    .webDAVRemoteAllowInvalidCertificate
+            ),
+            String(
+                archiveViewModel.settings.webDAVWiFiOnly
+            ),
+            archiveViewModel.settings.webDAVLocalTitle,
+            archiveViewModel.settings.webDAVRemoteTitle
         ].joined(separator: "|")
     }
 
