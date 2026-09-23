@@ -393,21 +393,73 @@ final class RemoteThumbnailStore: @unchecked Sendable {
         baseURLString: String,
         maxPixelSize: Int
     ) async -> UIImage? {
+        if let streamed = await generateStreamingVideoThumbnail(
+            entry: entry,
+            settings: settings,
+            password: password,
+            baseURLString: baseURLString,
+            maxPixelSize: maxPixelSize
+        ) {
+            return streamed
+        }
+
+        // Keep large videos Range-only. Small clips can safely
+        // fall back to a complete temporary download if the
+        // streaming image generator cannot produce a frame.
+        guard entry.size > 0,
+              entry.size <= 24 * 1024 * 1024 else {
+            return nil
+        }
+
+        do {
+            let service = try WebDAVArchiveService(
+                settings: settings,
+                password: password,
+                baseURLString: baseURLString
+            )
+
+            let temporary = try await service
+                .downloadToTemporaryFile(
+                    path: entry.path
+                )
+
+            return await Self.generateLocalVideoThumbnail(
+                url: temporary,
+                maxPixelSize: maxPixelSize
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func generateStreamingVideoThumbnail(
+        entry: RemoteMediaEntry,
+        settings: SMBSettings,
+        password: String,
+        baseURLString: String,
+        maxPixelSize: Int
+    ) async -> UIImage? {
         await withCheckedContinuation { continuation in
             let loader = WebDAVAssetResourceLoader(
                 path: entry.path,
                 settings: settings,
                 password: password,
-                preferredBaseURLString: baseURLString
+                preferredBaseURLString:
+                    baseURLString
             )
 
             let virtualURL = URL(
-                string: "filemann-thumb://video/\(UUID().uuidString)"
+                string:
+                    "filemann-thumb://video/\(UUID().uuidString)"
             )!
 
-            let asset = AVURLAsset(url: virtualURL)
+            let asset = AVURLAsset(
+                url: virtualURL
+            )
+
             let queue = DispatchQueue(
-                label: "FileMann.RemoteThumbnail.Video"
+                label:
+                    "FileMann.RemoteThumbnail.Video"
             )
 
             asset.resourceLoader.setDelegate(
@@ -418,43 +470,90 @@ final class RemoteThumbnailStore: @unchecked Sendable {
             let generator = AVAssetImageGenerator(
                 asset: asset
             )
-            generator.appliesPreferredTrackTransform = true
+            generator.appliesPreferredTrackTransform =
+                true
             generator.maximumSize = CGSize(
                 width: maxPixelSize,
                 height: maxPixelSize
             )
-            generator.requestedTimeToleranceBefore = CMTime(
-                seconds: 0.35,
-                preferredTimescale: 600
-            )
-            generator.requestedTimeToleranceAfter = CMTime(
-                seconds: 0.35,
-                preferredTimescale: 600
-            )
+            generator.requestedTimeToleranceBefore =
+                CMTime(
+                    seconds: 0.5,
+                    preferredTimescale: 600
+                )
+            generator.requestedTimeToleranceAfter =
+                CMTime(
+                    seconds: 0.5,
+                    preferredTimescale: 600
+                )
 
             let time = CMTime(
-                seconds: 0.25,
+                seconds: 0.05,
                 preferredTimescale: 600
             )
 
             generator.generateCGImagesAsynchronously(
-                forTimes: [NSValue(time: time)]
+                forTimes: [
+                    NSValue(time: time)
+                ]
             ) { _, image, _, _, _ in
                 _ = loader
                 _ = asset
                 _ = generator
 
-                if let image {
-                    continuation.resume(
-                        returning: UIImage(
-                            cgImage: image
-                        )
-                    )
-                } else {
-                    continuation.resume(
-                        returning: nil
-                    )
-                }
+                continuation.resume(
+                    returning: image.map {
+                        UIImage(cgImage: $0)
+                    }
+                )
+            }
+        }
+    }
+
+    private static func generateLocalVideoThumbnail(
+        url: URL,
+        maxPixelSize: Int
+    ) async -> UIImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(
+            asset: asset
+        )
+
+        generator.appliesPreferredTrackTransform =
+            true
+        generator.maximumSize = CGSize(
+            width: maxPixelSize,
+            height: maxPixelSize
+        )
+        generator.requestedTimeToleranceBefore =
+            CMTime(
+                seconds: 0.5,
+                preferredTimescale: 600
+            )
+        generator.requestedTimeToleranceAfter =
+            CMTime(
+                seconds: 0.5,
+                preferredTimescale: 600
+            )
+
+        return await withCheckedContinuation { continuation in
+            let time = CMTime(
+                seconds: 0.05,
+                preferredTimescale: 600
+            )
+
+            generator.generateCGImagesAsynchronously(
+                forTimes: [
+                    NSValue(time: time)
+                ]
+            ) { _, image, _, _, _ in
+                _ = generator
+
+                continuation.resume(
+                    returning: image.map {
+                        UIImage(cgImage: $0)
+                    }
+                )
             }
         }
     }
