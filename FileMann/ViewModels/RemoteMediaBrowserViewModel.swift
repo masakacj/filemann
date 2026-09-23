@@ -7,6 +7,7 @@ final class RemoteMediaBrowserViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var endpointLabel: String?
+    @Published var endpointTitle: String?
     @Published var resolvedBaseURL: String?
 
     let settings: SMBSettings
@@ -16,8 +17,8 @@ final class RemoteMediaBrowserViewModel: ObservableObject {
     init(settings: SMBSettings, password: String) {
         self.settings = settings
         self.password = password
-        self.rootPath = settings.normalizedWebDAVDirectory
-        self.currentPath = settings.normalizedWebDAVDirectory
+        self.rootPath = ""
+        self.currentPath = ""
     }
 
     var canGoUp: Bool {
@@ -45,6 +46,9 @@ final class RemoteMediaBrowserViewModel: ObservableObject {
                 let values = try await service.listRemoteMedia(at: target)
                 resolvedBaseURL = service.baseURLString
                 endpointLabel = service.endpointLabel
+                endpointTitle = settings.webDAVTitle(
+                    for: service.baseURLString
+                )
                 entries = values.filter {
                     $0.kind == .folder ||
                     $0.kind == .image ||
