@@ -9,7 +9,10 @@ struct RemoteImageViewerView: View {
     let baseURLString: String
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
+
     @State private var image: UIImage?
+    @State private var isLoadingOriginal = true
     @State private var errorMessage: String?
 
     var body: some View {
@@ -47,8 +50,16 @@ struct RemoteImageViewerView: View {
 
                     Spacer()
 
-                    Color.clear
-                        .frame(width: 44)
+                    if isLoadingOriginal,
+                       image != nil {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(.white)
+                            .frame(width: 44)
+                    } else {
+                        Color.clear
+                            .frame(width: 44)
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding()
@@ -63,6 +74,37 @@ struct RemoteImageViewerView: View {
     }
 
     private func load() async {
+        if let cached = RemoteOriginalImageCache.shared.cachedURL(
+            entry: entry,
+            baseURLString: baseURLString
+        ),
+           let decoded = Self.decodeImage(at: cached) {
+            image = decoded
+            isLoadingOriginal = false
+            return
+        }
+
+        let previewPixelSize = max(
+            960,
+            min(
+                1800,
+                Int(
+                    UIScreen.main.bounds.width *
+                    displayScale * 1.35
+                )
+            )
+        )
+
+        if let preview = await RemoteThumbnailStore.shared.load(
+            entry: entry,
+            settings: settings,
+            password: password,
+            baseURLString: baseURLString,
+            maxPixelSize: previewPixelSize
+        ) {
+            image = preview
+        }
+
         do {
             var service = try WebDAVArchiveService(
                 settings: settings,
@@ -72,38 +114,60 @@ struct RemoteImageViewerView: View {
 
             let temporary: URL
             do {
-                temporary = try await service.downloadToTemporaryFile(
-                    path: entry.path
-                )
+                temporary = try await service
+                    .downloadToTemporaryFile(
+                        path: entry.path
+                    )
             } catch {
-                let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
-                    settings: settings,
-                    password: password,
-                    forceRemote: true
-                )
+                let resolved = try await WebDAVArchiveService
+                    .resolveBestBaseURL(
+                        settings: settings,
+                        password: password,
+                        forceRemote: true
+                    )
+
                 service = try WebDAVArchiveService(
                     settings: settings,
                     password: password,
                     baseURLString: resolved
                 )
-                temporary = try await service.downloadToTemporaryFile(
-                    path: entry.path
-                )
+
+                temporary = try await service
+                    .downloadToTemporaryFile(
+                        path: entry.path
+                    )
             }
 
-            image = Self.decodeImage(at: temporary)
-            if image == nil {
+            let cached = RemoteOriginalImageCache.shared.store(
+                temporaryURL: temporary,
+                entry: entry,
+                baseURLString: service.baseURLString
+            )
+
+            if let decoded = Self.decodeImage(
+                at: cached
+            ) {
+                image = decoded
+            } else if image == nil {
                 errorMessage = "图片格式无法解码"
             }
         } catch {
-            errorMessage = error.localizedDescription
+            if image == nil {
+                errorMessage = error.localizedDescription
+            }
         }
+
+        isLoadingOriginal = false
     }
 
-    private static func decodeImage(at url: URL) -> UIImage? {
+    private static func decodeImage(
+        at url: URL
+    ) -> UIImage? {
         guard let source = CGImageSourceCreateWithURL(
             url as CFURL,
-            nil
+            [
+                kCGImageSourceShouldCache: false
+            ] as CFDictionary
         ) else {
             return nil
         }
@@ -112,7 +176,8 @@ struct RemoteImageViewerView: View {
             source,
             0,
             [
-                kCGImageSourceShouldCacheImmediately: true
+                kCGImageSourceShouldCacheImmediately:
+                    true
             ] as CFDictionary
         ) else {
             return nil
