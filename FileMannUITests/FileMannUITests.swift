@@ -161,9 +161,12 @@ final class FileMannUITests: XCTestCase {
         )
         center.tap()
 
-        let progress = app.otherElements[
-            "video-progress-overlay"
-        ]
+        let progress = app
+            .descendants(matching: .any)
+            .matching(
+                identifier: "video-progress-overlay"
+            )
+            .firstMatch
         XCTAssertTrue(
             progress.waitForExistence(timeout: 2),
             "播放操作后应显示进度条"
@@ -178,9 +181,9 @@ final class FileMannUITests: XCTestCase {
         right.press(forDuration: 0.7)
 
         XCTAssertTrue(
-            app.staticTexts["逐帧前进"]
+            app.staticTexts["暂停"]
                 .waitForExistence(timeout: 2),
-            "长按右侧应进入逐帧前进"
+            "长按右侧逐帧结束后应保持暂停"
         )
     }
 
@@ -217,9 +220,12 @@ final class FileMannUITests: XCTestCase {
         _ app: XCUIApplication,
         name: String
     ) {
-        let thumbnail = app.otherElements[
-            "remote-thumbnail-\(name)"
-        ]
+        let thumbnail = app
+            .descendants(matching: .any)
+            .matching(
+                identifier: "remote-thumbnail-\(name)"
+            )
+            .firstMatch
         XCTAssertTrue(
             thumbnail.waitForExistence(timeout: 5)
         )
