@@ -3,183 +3,457 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
     @Environment(\.dismiss) private var dismiss
+
     @State private var isShowingDirectoryPicker = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("传输方式") {
-                    Picker("协议", selection: $viewModel.settings.transport) {
+                    Picker(
+                        "协议",
+                        selection: $viewModel.settings.transport
+                    ) {
                         ForEach(ArchiveTransport.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                            Text(mode.title)
+                                .tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
                 }
 
                 if viewModel.settings.transport == .webDAV {
-                    webDAVSection
+                    webDAVConnections
+                    webDAVArchiveOptions
                 } else {
                     smbSection
+                    smbArchiveOptions
                 }
 
-                archiveDirectorySection
-
-                Section {
-                    Toggle(
-                        "整批校验通过后删除手机源文件",
-                        isOn: $viewModel.settings.deleteAfterArchive
-                    )
-
-                    if viewModel.settings.transport == .webDAV {
-                        Toggle(
-                            "仅 Wi‑Fi",
-                            isOn: $viewModel.settings.webDAVWiFiOnly
-                        )
-
-                        LabeledContent("后台传输") {
-                            Label("iOS 系统托管", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        }
-                    } else {
-                        Picker("断点块大小", selection: $viewModel.settings.chunkSizeMB) {
-                            Text("4 MB").tag(4)
-                            Text("8 MB").tag(8)
-                            Text("16 MB").tag(16)
-                            Text("32 MB").tag(32)
-                        }
-                    }
-                } header: {
-                    Text("归档")
-                } footer: {
-                    if viewModel.settings.transport == .webDAV {
-                        Text("WebDAV 上传使用 iOS Background URLSession。切到其他 App 或锁屏后，系统可继续上传；上传完成后 FileMann 再核对 NAS 文件数量和总字节数，通过后才按设置删除本地副本。")
-                    } else {
-                        Text("SMB 为兼容模式。FileMann 会先完成全部传输，再逐项核对 NAS 文件数量和总字节数；只有整批校验通过才请求删除手机源文件。")
-                    }
-                }
-
-                Section {
-                    Button("测试连接") {
-                        viewModel.saveSettings()
-                        viewModel.testConnection()
-                    }
-
-                    if let message = viewModel.connectionTestMessage {
-                        Text(message)
-                            .foregroundStyle(message == "连接成功" ? .green : .secondary)
-                    }
-                } footer: {
-                    if viewModel.settings.transport == .webDAV {
-                        Text("本地地址用于家中局域网，远程地址用于外网。FileMann 会优先本地、失败后自动尝试远程。远程 WebDAV 建议只使用可信 HTTPS；HTTP 仅建议在可信局域网使用。")
-                    } else {
-                        Text("共享名是 SMB 第一层 share，例如 \\NAS\\storage。")
-                    }
-                }
+                connectionTestSection
             }
-            .navigationTitle("归档设置")
+            .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+                ToolbarItem(
+                    placement: .cancellationAction
+                ) {
                     Button("取消") {
                         dismiss()
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
+
+                ToolbarItem(
+                    placement: .confirmationAction
+                ) {
+                    Button("存储") {
                         viewModel.saveSettings()
                         dismiss()
                     }
                 }
             }
-            .sheet(isPresented: $isShowingDirectoryPicker) {
+            .sheet(
+                isPresented: $isShowingDirectoryPicker
+            ) {
                 SMBDirectoryPickerView()
                     .environmentObject(viewModel)
             }
         }
+        .preferredColorScheme(.dark)
     }
 
-    private var webDAVSection: some View {
-        Section("QNAP WebDAV") {
-            TextField(
-                "本地地址，例如 http://192.168.1.10:5000/Archive",
-                text: $viewModel.settings.webDAVBaseURL
+    private var webDAVConnections: some View {
+        Section {
+            NavigationLink {
+                WebDAVEndpointEditor(
+                    settings: $viewModel.settings,
+                    password: $viewModel.webDAVPassword,
+                    endpoint: .local
+                )
+            } label: {
+                connectionRow(
+                    title: viewModel.settings.webDAVLocalTitle,
+                    host: viewModel.settings.webDAVLocalHost,
+                    fallback: "未配置本地地址",
+                    systemImage: "house.fill"
+                )
+            }
+
+            NavigationLink {
+                WebDAVEndpointEditor(
+                    settings: $viewModel.settings,
+                    password: $viewModel.webDAVPassword,
+                    endpoint: .remote
+                )
+            } label: {
+                connectionRow(
+                    title: viewModel.settings.webDAVRemoteTitle,
+                    host: viewModel.settings.webDAVRemoteHost,
+                    fallback: "未配置远程地址",
+                    systemImage: "globe"
+                )
+            }
+        } header: {
+            Text("WebDAV")
+        } footer: {
+            Text(
+                "FileMann 始终优先尝试本地连接；本地不可达时自动切换远程连接。用户名和密码由两个地址共用。"
             )
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(.URL)
-
-            TextField(
-                "远程地址，例如 https://nas.example.com/Archive",
-                text: $viewModel.settings.webDAVRemoteBaseURL
-            )
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .keyboardType(.URL)
-
-            Text("连接时始终先尝试本地地址；本地不可达时自动切换远程地址。远程地址建议使用可信 HTTPS。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            TextField("用户名", text: $viewModel.settings.webDAVUsername)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            SecureField("密码", text: $viewModel.webDAVPassword)
         }
     }
 
-    private var smbSection: some View {
-        Section("SMB 兼容模式") {
-            TextField("服务器 IP / 主机名", text: $viewModel.settings.host)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            TextField("共享名（Share）", text: $viewModel.settings.share)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            TextField("用户名", text: $viewModel.settings.username)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            SecureField("密码", text: $viewModel.password)
-        }
-    }
-
-    private var archiveDirectorySection: some View {
-        Section("归档子目录") {
+    private var webDAVArchiveOptions: some View {
+        Section {
             HStack {
                 Image(systemName: "folder")
                 Text(
-                    viewModel.settings.activeRemoteDirectory.isEmpty
+                    viewModel.settings
+                        .normalizedWebDAVDirectory
+                        .isEmpty
                         ? "/"
-                        : "/\(viewModel.settings.activeRemoteDirectory)"
+                        : "/\(viewModel.settings.normalizedWebDAVDirectory)"
                 )
                 .font(.body.monospaced())
                 .lineLimit(2)
             }
 
-            Button("浏览并选择目录") {
+            Button("浏览并选择归档目录") {
                 isShowingDirectoryPicker = true
             }
             .disabled(!viewModel.settings.isValid)
 
-            if viewModel.settings.transport == .webDAV {
-                TextField(
-                    "也可手动输入子目录",
-                    text: $viewModel.settings.webDAVRemoteDirectory
+            TextField(
+                "归档子目录",
+                text: $viewModel.settings
+                    .webDAVRemoteDirectory
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            Toggle(
+                "整批校验通过后删除手机源文件",
+                isOn: $viewModel.settings.deleteAfterArchive
+            )
+
+            Toggle(
+                "仅 Wi‑Fi",
+                isOn: $viewModel.settings.webDAVWiFiOnly
+            )
+
+            LabeledContent("后台传输") {
+                Label(
+                    "iOS 系统托管",
+                    systemImage: "checkmark.circle.fill"
                 )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            } else {
-                TextField(
-                    "也可手动输入子目录",
-                    text: $viewModel.settings.remoteDirectory
-                )
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+                .foregroundStyle(.green)
             }
+        } header: {
+            Text("归档")
+        } footer: {
+            Text(
+                "归档目录相对于当前 WebDAV 根路径。上传完成后会再次核对 NAS 文件数量和字节数，通过后才按设置删除本地副本。"
+            )
+        }
+    }
+
+    private var smbSection: some View {
+        Section("SMB 兼容模式") {
+            TextField(
+                "服务器 IP / 主机名",
+                text: $viewModel.settings.host
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            TextField(
+                "共享名（Share）",
+                text: $viewModel.settings.share
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            TextField(
+                "用户名",
+                text: $viewModel.settings.username
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            SecureField(
+                "密码",
+                text: $viewModel.password
+            )
+        }
+    }
+
+    private var smbArchiveOptions: some View {
+        Section("归档") {
+            TextField(
+                "归档子目录",
+                text: $viewModel.settings.remoteDirectory
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            Toggle(
+                "整批校验通过后删除手机源文件",
+                isOn: $viewModel.settings.deleteAfterArchive
+            )
+
+            Picker(
+                "断点块大小",
+                selection: $viewModel.settings.chunkSizeMB
+            ) {
+                Text("4 MB").tag(4)
+                Text("8 MB").tag(8)
+                Text("16 MB").tag(16)
+                Text("32 MB").tag(32)
+            }
+        }
+    }
+
+    private var connectionTestSection: some View {
+        Section {
+            Button("测试连接") {
+                viewModel.saveSettings()
+                viewModel.testConnection()
+            }
+
+            if let message = viewModel.connectionTestMessage {
+                Text(message)
+                    .foregroundStyle(
+                        message.hasPrefix("连接成功")
+                            ? .green
+                            : .secondary
+                    )
+            }
+        } footer: {
+            if viewModel.settings.transport == .webDAV {
+                Text(
+                    "本地和远程端口都支持自定义。远程连接建议使用证书有效的 HTTPS。"
+                )
+            }
+        }
+    }
+
+    private func connectionRow(
+        title: String,
+        host: String,
+        fallback: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .frame(width: 28)
+                .foregroundStyle(.yellow)
+
+            VStack(
+                alignment: .leading,
+                spacing: 3
+            ) {
+                Text(
+                    title.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                        ? fallback
+                        : title
+                )
+
+                Text(
+                    host.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                        ? fallback
+                        : host
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private enum WebDAVEndpointKind {
+    case local
+    case remote
+
+    var navigationTitle: String {
+        switch self {
+        case .local:
+            return "本地 WebDAV"
+        case .remote:
+            return "远程 WebDAV"
+        }
+    }
+}
+
+private struct WebDAVEndpointEditor: View {
+    @Binding var settings: SMBSettings
+    @Binding var password: String
+
+    let endpoint: WebDAVEndpointKind
+
+    var body: some View {
+        Form {
+            Section {
+                TextField(
+                    "标题",
+                    text: titleBinding
+                )
+
+                TextField(
+                    "主机",
+                    text: hostBinding
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+
+                TextField(
+                    "用户",
+                    text: $settings.webDAVUsername
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+                SecureField(
+                    "密码",
+                    text: $password
+                )
+            }
+
+            Section("高级") {
+                TextField(
+                    "端口",
+                    text: portBinding
+                )
+                .keyboardType(.numberPad)
+
+                TextField(
+                    "路径",
+                    text: pathBinding
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+                Toggle(
+                    "HTTPS",
+                    isOn: httpsBinding
+                )
+            }
+
+            Section {
+                LabeledContent("实际地址") {
+                    Text(previewURL)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            } footer: {
+                Text(
+                    endpoint == .local
+                        ? "本地地址用于家中局域网，支持自定义端口。"
+                        : "远程地址用于外网访问，建议开启 HTTPS 并使用与主机名匹配的有效证书。"
+                )
+            }
+        }
+        .navigationTitle(endpoint.navigationTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .preferredColorScheme(.dark)
+    }
+
+    private var titleBinding: Binding<String> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalTitle
+                    : settings.webDAVRemoteTitle
+            },
+            set: { value in
+                if endpoint == .local {
+                    settings.webDAVLocalTitle = value
+                } else {
+                    settings.webDAVRemoteTitle = value
+                }
+            }
+        )
+    }
+
+    private var hostBinding: Binding<String> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalHost
+                    : settings.webDAVRemoteHost
+            },
+            set: { value in
+                if endpoint == .local {
+                    settings.webDAVLocalHost = value
+                } else {
+                    settings.webDAVRemoteHost = value
+                }
+            }
+        )
+    }
+
+    private var portBinding: Binding<String> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalPort
+                    : settings.webDAVRemotePort
+            },
+            set: { value in
+                let filtered = value.filter(\.isNumber)
+                if endpoint == .local {
+                    settings.webDAVLocalPort = filtered
+                } else {
+                    settings.webDAVRemotePort = filtered
+                }
+            }
+        )
+    }
+
+    private var pathBinding: Binding<String> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalPath
+                    : settings.webDAVRemotePath
+            },
+            set: { value in
+                if endpoint == .local {
+                    settings.webDAVLocalPath = value
+                } else {
+                    settings.webDAVRemotePath = value
+                }
+            }
+        )
+    }
+
+    private var httpsBinding: Binding<Bool> {
+        Binding(
+            get: {
+                endpoint == .local
+                    ? settings.webDAVLocalHTTPS
+                    : settings.webDAVRemoteHTTPS
+            },
+            set: { value in
+                if endpoint == .local {
+                    settings.webDAVLocalHTTPS = value
+                } else {
+                    settings.webDAVRemoteHTTPS = value
+                }
+            }
+        )
+    }
+
+    private var previewURL: String {
+        switch endpoint {
+        case .local:
+            return settings.normalizedWebDAVBaseURL
+        case .remote:
+            return settings.normalizedWebDAVRemoteBaseURL
         }
     }
 }
