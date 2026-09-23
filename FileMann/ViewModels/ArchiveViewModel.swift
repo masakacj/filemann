@@ -1026,6 +1026,10 @@ final class ArchiveViewModel: ObservableObject {
            case .sourceUnavailable = value {
             return true
         }
+        if let value = error as? WebDAVArchiveError,
+           case .sourceUnavailable = value {
+            return true
+        }
         return false
     }
 
