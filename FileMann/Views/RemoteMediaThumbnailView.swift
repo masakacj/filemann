@@ -507,12 +507,13 @@ final class RemoteThumbnailStore: @unchecked Sendable {
         isFinal: Bool,
         maxPixelSize: Int
     ) -> UIImage? {
-        guard !data.isEmpty,
-              let source = CGImageSourceCreateIncremental(
-                nil
-              ) else {
+        guard !data.isEmpty else {
             return nil
         }
+
+        let source = CGImageSourceCreateIncremental(
+            nil
+        )
 
         CGImageSourceUpdateData(
             source,
