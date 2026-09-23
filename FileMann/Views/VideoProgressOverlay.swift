@@ -38,7 +38,8 @@ struct VideoProgressOverlay: View {
                 cornerRadius: 12
             )
         )
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("播放进度")
         .accessibilityIdentifier("video-progress-overlay")
         .accessibilityValue(
             String(
