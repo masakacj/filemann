@@ -13,6 +13,7 @@ struct ContentView: View {
                     Label("NAS", systemImage: "externaldrive.fill")
                 }
         }
+        .preferredColorScheme(.dark)
     }
 }
 
