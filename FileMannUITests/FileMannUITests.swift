@@ -172,6 +172,11 @@ final class FileMannUITests: XCTestCase {
             "播放操作后应显示进度条"
         )
 
+        // Pause before frame stepping so the time delta comes
+        // from the frame-step gesture rather than normal playback.
+        center.tap()
+        let before = progressTime(progress)
+
         let right = window.coordinate(
             withNormalizedOffset: CGVector(
                 dx: 0.82,
@@ -181,10 +186,43 @@ final class FileMannUITests: XCTestCase {
         right.press(forDuration: 0.7)
 
         XCTAssertTrue(
-            app.staticTexts["暂停"]
-                .waitForExistence(timeout: 2),
-            "长按右侧逐帧结束后应保持暂停"
+            progress.waitForExistence(timeout: 2)
         )
+        let after = progressTime(progress)
+
+        XCTAssertGreaterThan(
+            after,
+            before,
+            "长按右侧应逐帧前进并实时更新画面/时间"
+        )
+
+        Thread.sleep(forTimeInterval: 5.4)
+        XCTAssertFalse(
+            progress.exists,
+            "5 秒无操作后进度条应自动隐藏"
+        )
+    }
+
+    private func progressTime(
+        _ element: XCUIElement
+    ) -> Double {
+        guard let value = element.value as? String else {
+            return 0
+        }
+
+        for component in value.split(separator: ";") {
+            let pair = component.split(
+                separator: "=",
+                maxSplits: 1
+            )
+            if pair.count == 2,
+               pair[0] == "current",
+               let number = Double(pair[1]) {
+                return number
+            }
+        }
+
+        return 0
     }
 
     private func configureBaseEnvironment(
