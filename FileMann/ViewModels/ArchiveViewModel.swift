@@ -486,7 +486,8 @@ final class ArchiveViewModel: ObservableObject {
                             request: request,
                             partialPath: partialPath,
                             finalPath: finalPath,
-                            expectedBytes: snapshot.fileSize
+                            expectedBytes: snapshot.fileSize,
+                            baseURLString: service.baseURLString
                         )
 
                         tasks[index].state = .uploading
