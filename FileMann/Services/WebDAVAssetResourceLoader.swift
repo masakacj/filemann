@@ -206,6 +206,69 @@ private final class WebDAVRangeWorker:
 
     func urlSession(
         _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        handleChallenge(
+            challenge,
+            completionHandler: completionHandler
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        handleChallenge(
+            challenge,
+            completionHandler: completionHandler
+        )
+    }
+
+    private func handleChallenge(
+        _ challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (
+            URLSession.AuthChallengeDisposition,
+            URLCredential?
+        ) -> Void
+    ) {
+        guard candidateIndex < candidates.count else {
+            completionHandler(
+                .performDefaultHandling,
+                nil
+            )
+            return
+        }
+
+        let candidate = candidates[candidateIndex]
+        let endpoint = WebDAVChallengeHandler.endpoint(
+            from: candidate
+        )
+
+        WebDAVChallengeHandler.handle(
+            challenge: challenge,
+            username: settings.webDAVUsername,
+            password: password,
+            allowInvalidCertificate:
+                settings.webDAVAllowsInvalidCertificate(
+                    for: candidate
+                ),
+            trustedHost: endpoint.host,
+            trustedPort: endpoint.port,
+            completionHandler: completionHandler
+        )
+    }
+
+    func urlSession(
+        _ session: URLSession,
         dataTask: URLSessionDataTask,
         didReceive response: URLResponse,
         completionHandler:
