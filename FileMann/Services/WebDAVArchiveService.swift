@@ -323,6 +323,51 @@ final class WebDAVArchiveService {
         }
     }
 
+    func downloadRangeData(
+        path: String,
+        start: Int64,
+        length: Int
+    ) async throws -> Data {
+        guard length > 0 else { return Data() }
+
+        let lower = max(0, start)
+        let upper = lower + Int64(length) - 1
+
+        var request = URLRequest(
+            url: remoteURL(for: path)
+        )
+        request.httpMethod = "GET"
+        request.setValue(
+            "bytes=\(lower)-\(upper)",
+            forHTTPHeaderField: "Range"
+        )
+        applyAuthorization(to: &request)
+
+        let (data, response) = try await session.data(
+            for: request
+        )
+
+        guard let http = response as? HTTPURLResponse else {
+            throw WebDAVArchiveError.invalidResponse
+        }
+
+        if http.statusCode == 206 {
+            return data.count > length
+                ? Data(data.prefix(length))
+                : data
+        }
+
+        if http.statusCode == 200, lower == 0 {
+            return data.count > length
+                ? Data(data.prefix(length))
+                : data
+        }
+
+        throw WebDAVArchiveError.unexpectedStatus(
+            http.statusCode
+        )
+    }
+
     func downloadData(path: String) async throws -> Data {
         var request = URLRequest(url: remoteURL(for: path))
         request.httpMethod = "GET"
