@@ -11,6 +11,7 @@ private struct BackgroundUploadDescriptor: Codable {
     let partialPath: String
     let finalPath: String
     let expectedBytes: Int64
+    let baseURLString: String
 }
 
 final class WebDAVBackgroundUploadManager: NSObject {
@@ -30,13 +31,15 @@ final class WebDAVBackgroundUploadManager: NSObject {
         request: URLRequest,
         partialPath: String,
         finalPath: String,
-        expectedBytes: Int64
+        expectedBytes: Int64,
+        baseURLString: String
     ) throws {
         let descriptor = BackgroundUploadDescriptor(
             taskID: taskID,
             partialPath: partialPath,
             finalPath: finalPath,
-            expectedBytes: expectedBytes
+            expectedBytes: expectedBytes,
+            baseURLString: baseURLString
         )
         let data = try JSONEncoder().encode(descriptor)
 
@@ -192,15 +195,38 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
         Task {
             do {
                 let settings = TaskStore.loadSettings()
-                let service = try WebDAVArchiveService(
+                let password = KeychainStore.loadWebDAVPassword()
+
+                var service = try WebDAVArchiveService(
                     settings: settings,
-                    password: KeychainStore.loadWebDAVPassword()
+                    password: password,
+                    baseURLString: descriptor.baseURLString
                 )
-                let result = try await service.finalizeBackgroundUpload(
-                    partialPath: descriptor.partialPath,
-                    finalPath: descriptor.finalPath,
-                    expectedBytes: descriptor.expectedBytes
-                )
+
+                let result: ArchiveResult
+                do {
+                    result = try await service.finalizeBackgroundUpload(
+                        partialPath: descriptor.partialPath,
+                        finalPath: descriptor.finalPath,
+                        expectedBytes: descriptor.expectedBytes
+                    )
+                } catch {
+                    let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
+                        settings: settings,
+                        password: password,
+                        forceRemote: true
+                    )
+                    service = try WebDAVArchiveService(
+                        settings: settings,
+                        password: password,
+                        baseURLString: resolved
+                    )
+                    result = try await service.finalizeBackgroundUpload(
+                        partialPath: descriptor.partialPath,
+                        finalPath: descriptor.finalPath,
+                        expectedBytes: descriptor.expectedBytes
+                    )
+                }
 
                 NotificationCenter.default.post(
                     name: .fileMannWebDAVCompleted,
