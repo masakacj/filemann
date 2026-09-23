@@ -96,7 +96,7 @@ enum FileMannShared {
         }
 
         let bookmark = try url.bookmarkData(
-            options: [.withSecurityScope],
+            options: [.minimalBookmark],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
@@ -382,7 +382,7 @@ private final class SecurityScopedFolderAccess:
         var stale = false
         let url = try URL(
             resolvingBookmarkData: bookmarkData,
-            options: [.withSecurityScope],
+            options: [],
             relativeTo: nil,
             bookmarkDataIsStale: &stale
         )
@@ -394,7 +394,7 @@ private final class SecurityScopedFolderAccess:
         let refreshedBookmark: Data?
         if stale {
             refreshedBookmark = try? url.bookmarkData(
-                options: [.withSecurityScope],
+                options: [.minimalBookmark],
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
