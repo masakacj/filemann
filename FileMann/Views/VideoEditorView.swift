@@ -8,9 +8,13 @@ struct VideoEditorView: View {
     @State private var showAdjustments = false
     @State private var gestureHUD: String?
     @State private var hudTask: Task<Void, Never>?
+    @State private var controlsVisible = true
+    @State private var controlsHideTask: Task<Void, Never>?
 
     init(url: URL) {
-        _viewModel = StateObject(wrappedValue: VideoEditorViewModel(url: url))
+        _viewModel = StateObject(
+            wrappedValue: VideoEditorViewModel(url: url)
+        )
     }
 
     var body: some View {
@@ -28,7 +32,10 @@ struct VideoEditorView: View {
                     onLongPressChanged: handleLongPressChanged,
                     onLongPressEnded: handleLongPressEnded
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    maxWidth: .infinity,
+                    maxHeight: .infinity
+                )
             }
 
             if let gestureHUD {
@@ -37,7 +44,10 @@ struct VideoEditorView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
-                    .background(.black.opacity(0.55), in: Capsule())
+                    .background(
+                        .black.opacity(0.55),
+                        in: Capsule()
+                    )
                     .allowsHitTesting(false)
             }
 
@@ -47,17 +57,41 @@ struct VideoEditorView: View {
 
                     AdjustmentPanel(
                         adjustments: $viewModel.adjustments,
-                        selectedParameterID: $selectedParameterID,
+                        selectedParameterID:
+                            $selectedParameterID,
                         onChange: {
                             viewModel.adjustmentsDidChange()
+                            showControls()
                         },
                         onReset: {
                             viewModel.reset()
+                            showControls()
                         }
                     )
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(
+                        .move(edge: .bottom)
+                        .combined(with: .opacity)
+                    )
                 }
                 .ignoresSafeArea(edges: .bottom)
+            }
+
+            if controlsVisible {
+                VStack {
+                    Spacer()
+
+                    VideoProgressOverlay(
+                        currentTime: viewModel.currentTime,
+                        duration: viewModel.duration
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(
+                        .bottom,
+                        showAdjustments ? 190 : 16
+                    )
+                    .transition(.opacity)
+                }
+                .allowsHitTesting(false)
             }
 
             VStack {
@@ -67,29 +101,49 @@ struct VideoEditorView: View {
                     Spacer()
 
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
+                        withAnimation(
+                            .easeInOut(duration: 0.18)
+                        ) {
                             showAdjustments.toggle()
                         }
+                        showControls()
                     } label: {
-                        Image(systemName: showAdjustments ? "xmark" : "slider.horizontal.3")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .frame(width: 48, height: 48)
-                            .background(.black.opacity(0.58), in: Circle())
+                        Image(
+                            systemName: showAdjustments
+                                ? "xmark"
+                                : "slider.horizontal.3"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(
+                            width: 48,
+                            height: 48
+                        )
+                        .background(
+                            .black.opacity(0.58),
+                            in: Circle()
+                        )
                     }
-                    .accessibilityLabel(showAdjustments ? "关闭视频调整" : "打开视频调整")
+                    .accessibilityLabel(
+                        showAdjustments
+                            ? "关闭视频调整"
+                            : "打开视频调整"
+                    )
                 }
                 .padding(.trailing, 18)
                 .padding(
                     .bottom,
-                    showAdjustments ? 172 : 18
+                    showAdjustments ? 188 : 76
                 )
             }
-            .allowsHitTesting(true)
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            showControls()
+        }
         .onDisappear {
             hudTask?.cancel()
+            controlsHideTask?.cancel()
             viewModel.pause()
         }
     }
@@ -110,25 +164,39 @@ struct VideoEditorView: View {
             Spacer()
 
             Color.clear
-                .frame(width: 44, height: 1)
+                .frame(
+                    width: 44,
+                    height: 1
+                )
         }
         .foregroundStyle(.white)
         .padding()
         .background(.black.opacity(0.5))
     }
 
-    private func handleTap(_ region: VideoGestureRegion) {
+    private func handleTap(
+        _ region: VideoGestureRegion
+    ) {
+        showControls()
+
         switch region {
         case .left:
             viewModel.step(-1)
             showHUD("−1 帧")
+
         case .center:
             let willPlay = !viewModel.isPlaying
             viewModel.togglePlayback()
-            showHUD(willPlay ? "播放" : "暂停")
+            showHUD(
+                willPlay
+                    ? "播放"
+                    : "暂停"
+            )
+
         case .right:
             viewModel.step(1)
             showHUD("+1 帧")
+
         case .scrub:
             break
         }
@@ -138,18 +206,30 @@ struct VideoEditorView: View {
         _ region: VideoGestureRegion,
         fraction: CGFloat
     ) {
+        showControls(autoHide: false)
+
         switch region {
         case .left:
-            viewModel.beginReverseShuttle()
-            showHUD("1.5× 倒退", persistent: true)
+            viewModel.beginContinuousFrameStep(
+                direction: -1
+            )
+            showHUD(
+                "逐帧倒退",
+                persistent: true
+            )
 
         case .right:
-            viewModel.beginForwardShuttle()
-            showHUD("1.5× 快进", persistent: true)
+            viewModel.beginContinuousFrameStep(
+                direction: 1
+            )
+            showHUD(
+                "逐帧前进",
+                persistent: true
+            )
 
         case .scrub:
-            viewModel.beginFrameScrub()
-            viewModel.scrubFrames(to: fraction)
+            viewModel.beginScrub()
+            viewModel.scrub(to: fraction)
             showScrubHUD()
 
         case .center:
@@ -161,47 +241,76 @@ struct VideoEditorView: View {
         _ region: VideoGestureRegion,
         fraction: CGFloat
     ) {
-        guard region == .scrub else { return }
-        viewModel.scrubFrames(to: fraction)
+        showControls(autoHide: false)
+
+        guard region == .scrub else {
+            return
+        }
+
+        viewModel.scrub(to: fraction)
         showScrubHUD()
     }
 
-    private func handleLongPressEnded(_ region: VideoGestureRegion) {
+    private func handleLongPressEnded(
+        _ region: VideoGestureRegion
+    ) {
         switch region {
         case .left, .right:
-            viewModel.endShuttle()
-            showHUD(
-                viewModel.isPlaying ? "1× 播放" : "暂停",
-                persistent: false
-            )
+            viewModel.endContinuousFrameStep()
+            showHUD("暂停")
 
         case .scrub:
-            viewModel.endFrameScrub()
-            showHUD(
-                "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)",
+            viewModel.endScrub()
+            showScrubHUD(
                 persistent: false
             )
 
         case .center:
             hideHUD()
         }
+
+        showControls()
     }
 
-    private func showScrubHUD() {
-        let seconds = max(0, viewModel.currentTime)
-        let whole = Int(seconds)
-        let milliseconds = Int((seconds - Double(whole)) * 100)
-        let time = String(
-            format: "%d:%02d.%02d",
-            whole / 60,
-            whole % 60,
-            milliseconds
-        )
-
+    private func showScrubHUD(
+        persistent: Bool = true
+    ) {
         showHUD(
-            "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)  ·  \(time)",
-            persistent: true
+            "\(timeString(viewModel.currentTime)) / " +
+            "\(timeString(viewModel.duration))",
+            persistent: persistent
         )
+    }
+
+    private func showControls(
+        autoHide: Bool = true
+    ) {
+        controlsHideTask?.cancel()
+
+        withAnimation(
+            .easeOut(duration: 0.15)
+        ) {
+            controlsVisible = true
+        }
+
+        guard autoHide else {
+            return
+        }
+
+        controlsHideTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: 5_000_000_000
+            )
+            guard !Task.isCancelled else {
+                return
+            }
+
+            withAnimation(
+                .easeOut(duration: 0.22)
+            ) {
+                controlsVisible = false
+            }
+        }
     }
 
     private func showHUD(
@@ -211,12 +320,21 @@ struct VideoEditorView: View {
         hudTask?.cancel()
         gestureHUD = text
 
-        guard !persistent else { return }
+        guard !persistent else {
+            return
+        }
 
         hudTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 650_000_000)
-            guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.16)) {
+            try? await Task.sleep(
+                nanoseconds: 700_000_000
+            )
+            guard !Task.isCancelled else {
+                return
+            }
+
+            withAnimation(
+                .easeOut(duration: 0.16)
+            ) {
                 gestureHUD = nil
             }
         }
@@ -224,8 +342,39 @@ struct VideoEditorView: View {
 
     private func hideHUD() {
         hudTask?.cancel()
-        withAnimation(.easeOut(duration: 0.16)) {
+
+        withAnimation(
+            .easeOut(duration: 0.16)
+        ) {
             gestureHUD = nil
         }
+    }
+
+    private func timeString(
+        _ value: Double
+    ) -> String {
+        guard value.isFinite else {
+            return "0:00"
+        }
+
+        let seconds = max(
+            0,
+            Int(value.rounded(.down))
+        )
+
+        if seconds >= 3600 {
+            return String(
+                format: "%d:%02d:%02d",
+                seconds / 3600,
+                (seconds % 3600) / 60,
+                seconds % 60
+            )
+        }
+
+        return String(
+            format: "%d:%02d",
+            seconds / 60,
+            seconds % 60
+        )
     }
 }
