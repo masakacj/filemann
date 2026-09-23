@@ -17,12 +17,16 @@ enum ArchiveTransport: String, Codable, CaseIterable, Identifiable {
 struct SMBSettings: Codable, Equatable {
     var transport: ArchiveTransport = .webDAV
 
+    // QNAP / WebDAV. webDAVBaseURL is kept as the local address for
+    // backwards-compatible decoding of existing settings.
     var webDAVBaseURL: String = ""
+    var webDAVRemoteBaseURL: String = ""
     var webDAVRemoteDirectory: String = ""
     var webDAVUsername: String = ""
-    var webDAVWiFiOnly: Bool = true
+    var webDAVWiFiOnly: Bool = false
     var webDAVBackgroundTransfers: Bool = true
 
+    // SMB fallback.
     var host: String = ""
     var share: String = ""
     var remoteDirectory: String = ""
@@ -50,7 +54,22 @@ struct SMBSettings: Codable, Equatable {
     }
 
     var normalizedWebDAVBaseURL: String {
-        webDAVBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        normalizeWebDAVAddress(webDAVBaseURL)
+    }
+
+    var normalizedWebDAVRemoteBaseURL: String {
+        normalizeWebDAVAddress(webDAVRemoteBaseURL)
+    }
+
+    var webDAVCandidateBaseURLs: [String] {
+        var values: [String] = []
+        for value in [
+            normalizedWebDAVBaseURL,
+            normalizedWebDAVRemoteBaseURL
+        ] where !value.isEmpty && !values.contains(value) {
+            values.append(value)
+        }
+        return values
     }
 
     var activeRemoteDirectory: String {
@@ -63,21 +82,32 @@ struct SMBSettings: Codable, Equatable {
     var isValid: Bool {
         switch transport {
         case .webDAV:
-            guard let url = URL(string: normalizedWebDAVBaseURL),
-                  let scheme = url.scheme?.lowercased(),
-                  scheme == "http" || scheme == "https",
-                  url.host != nil else {
-                return false
-            }
-            return true
+            return webDAVCandidateBaseURLs.contains(where: Self.isValidWebDAVURL)
         case .smb:
             return !normalizedHost.isEmpty && !normalizedShare.isEmpty
         }
     }
 
+    static func isValidWebDAVURL(_ value: String) -> Bool {
+        guard let url = URL(string: value),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              url.host != nil else {
+            return false
+        }
+        return true
+    }
+
+    private func normalizeWebDAVAddress(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+
     enum CodingKeys: String, CodingKey {
         case transport
         case webDAVBaseURL
+        case webDAVRemoteBaseURL
         case webDAVRemoteDirectory
         case webDAVUsername
         case webDAVWiFiOnly
@@ -96,9 +126,10 @@ struct SMBSettings: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         transport = try c.decodeIfPresent(ArchiveTransport.self, forKey: .transport) ?? .webDAV
         webDAVBaseURL = try c.decodeIfPresent(String.self, forKey: .webDAVBaseURL) ?? ""
+        webDAVRemoteBaseURL = try c.decodeIfPresent(String.self, forKey: .webDAVRemoteBaseURL) ?? ""
         webDAVRemoteDirectory = try c.decodeIfPresent(String.self, forKey: .webDAVRemoteDirectory) ?? ""
         webDAVUsername = try c.decodeIfPresent(String.self, forKey: .webDAVUsername) ?? ""
-        webDAVWiFiOnly = try c.decodeIfPresent(Bool.self, forKey: .webDAVWiFiOnly) ?? true
+        webDAVWiFiOnly = try c.decodeIfPresent(Bool.self, forKey: .webDAVWiFiOnly) ?? false
         webDAVBackgroundTransfers = try c.decodeIfPresent(Bool.self, forKey: .webDAVBackgroundTransfers) ?? true
         host = try c.decodeIfPresent(String.self, forKey: .host) ?? ""
         share = try c.decodeIfPresent(String.self, forKey: .share) ?? ""
@@ -112,6 +143,7 @@ struct SMBSettings: Codable, Equatable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(transport, forKey: .transport)
         try c.encode(webDAVBaseURL, forKey: .webDAVBaseURL)
+        try c.encode(webDAVRemoteBaseURL, forKey: .webDAVRemoteBaseURL)
         try c.encode(webDAVRemoteDirectory, forKey: .webDAVRemoteDirectory)
         try c.encode(webDAVUsername, forKey: .webDAVUsername)
         try c.encode(webDAVWiFiOnly, forKey: .webDAVWiFiOnly)
