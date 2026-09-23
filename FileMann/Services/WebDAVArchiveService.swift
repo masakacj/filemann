@@ -53,6 +53,7 @@ struct RemoteMediaEntry: Identifiable, Hashable, Sendable {
 final class WebDAVArchiveService {
     let settings: SMBSettings
     private let password: String
+    private let sessionDelegate: WebDAVSessionDelegate
     private let session: URLSession
     private let baseURL: URL
 
@@ -85,13 +86,31 @@ final class WebDAVArchiveService {
 
         self.baseURL = url
 
+        let allowInvalidCertificate =
+            settings.webDAVAllowsInvalidCertificate(
+                for: candidate
+            )
+        let delegate = WebDAVSessionDelegate(
+            username: settings.webDAVUsername,
+            password: password,
+            allowInvalidCertificate:
+                allowInvalidCertificate,
+            baseURLString: candidate
+        )
+        self.sessionDelegate = delegate
+
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 300
-        configuration.allowsCellularAccess = !settings.webDAVWiFiOnly
+        configuration.allowsCellularAccess =
+            !settings.webDAVWiFiOnly
         configuration.waitsForConnectivity = false
         configuration.httpMaximumConnectionsPerHost = 4
-        self.session = URLSession(configuration: configuration)
+        self.session = URLSession(
+            configuration: configuration,
+            delegate: delegate,
+            delegateQueue: nil
+        )
     }
 
     static func resolveBestBaseURL(
@@ -121,7 +140,11 @@ final class WebDAVArchiveService {
                     username: settings.webDAVUsername,
                     password: password,
                     timeout: timeout,
-                    allowsCellular: !settings.webDAVWiFiOnly
+                    allowsCellular: !settings.webDAVWiFiOnly,
+                    allowInvalidCertificate:
+                        settings.webDAVAllowsInvalidCertificate(
+                            for: candidate
+                        )
                 )
                 return candidate
             } catch {
@@ -137,7 +160,8 @@ final class WebDAVArchiveService {
         username: String,
         password: String,
         timeout: TimeInterval,
-        allowsCellular: Bool
+        allowsCellular: Bool,
+        allowInvalidCertificate: Bool
     ) async throws {
         guard let url = URL(string: baseURLString) else {
             throw WebDAVArchiveError.invalidBaseURL
@@ -148,7 +172,19 @@ final class WebDAVArchiveService {
         config.timeoutIntervalForResource = timeout
         config.waitsForConnectivity = false
         config.allowsCellularAccess = allowsCellular
-        let session = URLSession(configuration: config)
+
+        let delegate = WebDAVSessionDelegate(
+            username: username,
+            password: password,
+            allowInvalidCertificate:
+                allowInvalidCertificate,
+            baseURLString: baseURLString
+        )
+        let session = URLSession(
+            configuration: config,
+            delegate: delegate,
+            delegateQueue: nil
+        )
 
         var request = URLRequest(url: url)
         request.httpMethod = "PROPFIND"
