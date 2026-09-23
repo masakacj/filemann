@@ -215,7 +215,9 @@ final class MediaLibraryViewModel: ObservableObject {
         let localDirectory =
             try FileMannShared.mediaDirectory()
         urls.append(
-            contentsOfMediaDirectory(localDirectory)
+            contentsOf: contentsOfMediaDirectory(
+                localDirectory
+            )
         )
 
         var externalName =
@@ -230,7 +232,7 @@ final class MediaLibraryViewModel: ObservableObject {
                     externalName =
                         externalDirectory.lastPathComponent
                     urls.append(
-                        contentsOfMediaDirectory(
+                        contentsOf: contentsOfMediaDirectory(
                             externalDirectory
                         )
                     )
