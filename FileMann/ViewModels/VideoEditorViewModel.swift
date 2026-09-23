@@ -8,7 +8,7 @@ final class VideoEditorViewModel: ObservableObject {
     @Published var duration: Double = 0
     @Published var frameRate: Double = 0
     @Published var isPlaying = false
-    @Published var isFastForwarding = false
+    @Published var isShuttling = false
     @Published var errorMessage: String?
 
     let url: URL
@@ -17,7 +17,8 @@ final class VideoEditorViewModel: ObservableObject {
     private let asset: AVURLAsset
     private var timeObserver: Any?
     private var filterTask: Task<Void, Never>?
-    private var wasPlayingBeforeFastForward = false
+    private var reverseTask: Task<Void, Never>?
+    private var wasPlayingBeforeShuttle = false
 
     init(url: URL) {
         self.url = url
@@ -41,6 +42,8 @@ final class VideoEditorViewModel: ObservableObject {
     }
 
     deinit {
+        reverseTask?.cancel()
+        filterTask?.cancel()
         if let timeObserver {
             player.removeTimeObserver(timeObserver)
         }
@@ -57,6 +60,7 @@ final class VideoEditorViewModel: ObservableObject {
     }
 
     func togglePlayback() {
+        endShuttle()
         if player.rate == 0 {
             player.play()
             isPlaying = true
@@ -67,50 +71,95 @@ final class VideoEditorViewModel: ObservableObject {
     }
 
     func pause() {
+        reverseTask?.cancel()
+        reverseTask = nil
         player.pause()
         isPlaying = false
-        isFastForwarding = false
+        isShuttling = false
     }
 
     func step(_ count: Int) {
+        reverseTask?.cancel()
+        reverseTask = nil
         player.pause()
         isPlaying = false
-        isFastForwarding = false
+        isShuttling = false
         player.currentItem?.step(byCount: count)
         currentTime = max(0, CMTimeGetSeconds(player.currentTime()))
     }
 
-    func seek(to seconds: Double) {
-        let target = CMTime(
-            seconds: max(0, min(duration, seconds)),
-            preferredTimescale: 600
-        )
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
-    }
+    func beginReverseShuttle() {
+        endShuttle()
+        wasPlayingBeforeShuttle = player.rate != 0
+        player.pause()
+        isPlaying = false
+        isShuttling = true
 
-    func beginFastForward() {
-        guard !isFastForwarding else { return }
-        wasPlayingBeforeFastForward = player.rate != 0
+        reverseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
 
-        if !wasPlayingBeforeFastForward {
-            player.play()
+            while !Task.isCancelled {
+                let stepSeconds = 0.075
+                let target = max(0, self.currentTime - stepSeconds)
+                self.seekPrecisely(to: target)
+
+                if target <= 0 {
+                    break
+                }
+
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
         }
-        player.rate = 2.0
-        isPlaying = true
-        isFastForwarding = true
     }
 
-    func endFastForward() {
-        guard isFastForwarding else { return }
+    func beginForwardShuttle() {
+        endShuttle()
+        wasPlayingBeforeShuttle = player.rate != 0
+        player.play()
+        player.rate = 1.5
+        isPlaying = true
+        isShuttling = true
+    }
 
-        if wasPlayingBeforeFastForward {
+    func endShuttle() {
+        reverseTask?.cancel()
+        reverseTask = nil
+
+        guard isShuttling else { return }
+
+        if wasPlayingBeforeShuttle {
+            player.play()
             player.rate = 1.0
             isPlaying = true
         } else {
             player.pause()
             isPlaying = false
         }
-        isFastForwarding = false
+
+        isShuttling = false
+    }
+
+    func beginFrameScrub() {
+        endShuttle()
+        player.pause()
+        isPlaying = false
+    }
+
+    func scrubFrames(to fraction: CGFloat) {
+        guard duration > 0 else { return }
+
+        let clamped = max(0, min(1, Double(fraction)))
+        if frameRate > 0 {
+            let frame = Int((Double(totalFrames) * clamped).rounded())
+            seekToFrame(frame)
+        } else {
+            seekPrecisely(to: duration * clamped)
+        }
+    }
+
+    func endFrameScrub() {
+        player.pause()
+        isPlaying = false
     }
 
     func reset() {
@@ -122,6 +171,19 @@ final class VideoEditorViewModel: ObservableObject {
         scheduleFilterUpdate(immediate: false)
     }
 
+    private func seekToFrame(_ frame: Int) {
+        guard frameRate > 0 else { return }
+        let value = max(0, min(totalFrames, frame))
+        seekPrecisely(to: Double(value) / frameRate)
+    }
+
+    private func seekPrecisely(to seconds: Double) {
+        let clamped = max(0, min(duration, seconds))
+        currentTime = clamped
+        let target = CMTime(seconds: clamped, preferredTimescale: 60_000)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
     private func scheduleFilterUpdate(immediate: Bool) {
         filterTask?.cancel()
 
@@ -130,8 +192,6 @@ final class VideoEditorViewModel: ObservableObject {
         let playerItem = self.player.currentItem
 
         filterTask = Task {
-            // Video adjustments are intentionally session-only.
-            // Do not write a sidecar or touch the original file.
             if !immediate {
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
