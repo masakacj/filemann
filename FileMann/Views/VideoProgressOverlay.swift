@@ -40,6 +40,13 @@ struct VideoProgressOverlay: View {
         )
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("video-progress-overlay")
+        .accessibilityValue(
+            String(
+                format: "current=%.3f;duration=%.3f",
+                currentTime,
+                duration
+            )
+        )
         .allowsHitTesting(false)
     }
 
