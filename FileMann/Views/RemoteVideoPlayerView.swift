@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RemoteVideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
@@ -6,6 +7,13 @@ struct RemoteVideoPlayerView: View {
 
     @State private var gestureHUD: String?
     @State private var hudTask: Task<Void, Never>?
+    @State private var controlsVisible = true
+    @State private var controlsHideTask: Task<Void, Never>?
+    @State private var posterImage: UIImage?
+
+    private let settings: SMBSettings
+    private let password: String
+    private let baseURLString: String
 
     init(
         entry: RemoteMediaEntry,
@@ -13,12 +21,17 @@ struct RemoteVideoPlayerView: View {
         password: String,
         baseURLString: String
     ) {
+        self.settings = settings
+        self.password = password
+        self.baseURLString = baseURLString
+
         _viewModel = StateObject(
             wrappedValue: RemoteVideoPlayerViewModel(
                 entry: entry,
                 settings: settings,
                 password: password,
-                preferredBaseURLString: baseURLString
+                preferredBaseURLString:
+                    baseURLString
             )
         )
     }
@@ -31,17 +44,35 @@ struct RemoteVideoPlayerView: View {
             VStack(spacing: 0) {
                 topBar
 
-                ZoomablePlayerView(
-                    player: viewModel.player,
-                    onTap: handleTap,
-                    onLongPressBegan: handleLongPressBegan,
-                    onLongPressChanged: handleLongPressChanged,
-                    onLongPressEnded: handleLongPressEnded
-                )
-                .frame(
-                    maxWidth: .infinity,
-                    maxHeight: .infinity
-                )
+                ZStack {
+                    ZoomablePlayerView(
+                        player: viewModel.player,
+                        onTap: handleTap,
+                        onLongPressBegan:
+                            handleLongPressBegan,
+                        onLongPressChanged:
+                            handleLongPressChanged,
+                        onLongPressEnded:
+                            handleLongPressEnded
+                    )
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity
+                    )
+
+                    if let posterImage,
+                       viewModel.currentTime < 0.01 {
+                        Image(uiImage: posterImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(
+                                maxWidth: .infinity,
+                                maxHeight: .infinity
+                            )
+                            .background(Color.black)
+                            .allowsHitTesting(false)
+                    }
+                }
             }
 
             if let gestureHUD {
@@ -57,19 +88,49 @@ struct RemoteVideoPlayerView: View {
                     .allowsHitTesting(false)
             }
 
+            if controlsVisible {
+                VStack {
+                    Spacer()
+
+                    VideoProgressOverlay(
+                        currentTime: viewModel.currentTime,
+                        duration: viewModel.duration
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 18)
+                    .transition(.opacity)
+                }
+                .allowsHitTesting(false)
+            }
+
             if let error = viewModel.errorMessage {
                 VStack {
                     Spacer()
+
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.orange)
-                        .padding()
+                        .padding(.horizontal)
+                        .padding(.bottom, 74)
                 }
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            showControls()
+        }
+        .task {
+            posterImage = await RemoteThumbnailStore.shared.load(
+                entry: viewModel.entry,
+                settings: settings,
+                password: password,
+                baseURLString: baseURLString,
+                maxPixelSize: 1280
+            )
+        }
         .onDisappear {
             hudTask?.cancel()
+            controlsHideTask?.cancel()
             viewModel.pause()
         }
     }
@@ -89,9 +150,12 @@ struct RemoteVideoPlayerView: View {
 
             Spacer()
 
-            Image(systemName: "icloud.and.arrow.down")
-                .foregroundStyle(.secondary)
-                .frame(width: 44)
+            Image(
+                systemName:
+                    "icloud.and.arrow.down"
+            )
+            .foregroundStyle(.secondary)
+            .frame(width: 44)
         }
         .foregroundStyle(.white)
         .padding()
@@ -101,17 +165,26 @@ struct RemoteVideoPlayerView: View {
     private func handleTap(
         _ region: VideoGestureRegion
     ) {
+        showControls()
+
         switch region {
         case .left:
             viewModel.step(-1)
             showHUD("−1 帧")
+
         case .center:
             let willPlay = !viewModel.isPlaying
             viewModel.togglePlayback()
-            showHUD(willPlay ? "播放" : "暂停")
+            showHUD(
+                willPlay
+                    ? "播放"
+                    : "暂停"
+            )
+
         case .right:
             viewModel.step(1)
             showHUD("+1 帧")
+
         case .scrub:
             break
         }
@@ -121,18 +194,30 @@ struct RemoteVideoPlayerView: View {
         _ region: VideoGestureRegion,
         fraction: CGFloat
     ) {
+        showControls(autoHide: false)
+
         switch region {
         case .left:
-            viewModel.beginReverseShuttle()
-            showHUD("1.5× 倒退", persistent: true)
+            viewModel.beginContinuousFrameStep(
+                direction: -1
+            )
+            showHUD(
+                "逐帧倒退",
+                persistent: true
+            )
 
         case .right:
-            viewModel.beginForwardShuttle()
-            showHUD("1.5× 快进", persistent: true)
+            viewModel.beginContinuousFrameStep(
+                direction: 1
+            )
+            showHUD(
+                "逐帧前进",
+                persistent: true
+            )
 
         case .scrub:
-            viewModel.beginFrameScrub()
-            viewModel.scrubFrames(to: fraction)
+            viewModel.beginScrub()
+            viewModel.scrub(to: fraction)
             showScrubHUD()
 
         case .center:
@@ -144,8 +229,13 @@ struct RemoteVideoPlayerView: View {
         _ region: VideoGestureRegion,
         fraction: CGFloat
     ) {
-        guard region == .scrub else { return }
-        viewModel.scrubFrames(to: fraction)
+        showControls(autoHide: false)
+
+        guard region == .scrub else {
+            return
+        }
+
+        viewModel.scrub(to: fraction)
         showScrubHUD()
     }
 
@@ -154,41 +244,61 @@ struct RemoteVideoPlayerView: View {
     ) {
         switch region {
         case .left, .right:
-            viewModel.endShuttle()
-            showHUD(
-                viewModel.isPlaying
-                    ? "1× 播放"
-                    : "暂停"
-            )
+            viewModel.endContinuousFrameStep()
+            showHUD("暂停")
 
         case .scrub:
-            viewModel.endFrameScrub()
-            showHUD(
-                "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)"
+            viewModel.endScrub()
+            showScrubHUD(
+                persistent: false
             )
 
         case .center:
-            break
+            hideHUD()
         }
+
+        showControls()
     }
 
-    private func showScrubHUD() {
-        let seconds = max(0, viewModel.currentTime)
-        let whole = Int(seconds)
-        let hundredths = Int(
-            (seconds - Double(whole)) * 100
-        )
-        let time = String(
-            format: "%d:%02d.%02d",
-            whole / 60,
-            whole % 60,
-            hundredths
-        )
-
+    private func showScrubHUD(
+        persistent: Bool = true
+    ) {
         showHUD(
-            "帧 \(viewModel.currentFrame) / \(viewModel.totalFrames)  ·  \(time)",
-            persistent: true
+            "\(timeString(viewModel.currentTime)) / " +
+            "\(timeString(viewModel.duration))",
+            persistent: persistent
         )
+    }
+
+    private func showControls(
+        autoHide: Bool = true
+    ) {
+        controlsHideTask?.cancel()
+
+        withAnimation(
+            .easeOut(duration: 0.15)
+        ) {
+            controlsVisible = true
+        }
+
+        guard autoHide else {
+            return
+        }
+
+        controlsHideTask = Task { @MainActor in
+            try? await Task.sleep(
+                nanoseconds: 5_000_000_000
+            )
+            guard !Task.isCancelled else {
+                return
+            }
+
+            withAnimation(
+                .easeOut(duration: 0.22)
+            ) {
+                controlsVisible = false
+            }
+        }
     }
 
     private func showHUD(
@@ -198,17 +308,61 @@ struct RemoteVideoPlayerView: View {
         hudTask?.cancel()
         gestureHUD = text
 
-        guard !persistent else { return }
+        guard !persistent else {
+            return
+        }
 
         hudTask = Task { @MainActor in
             try? await Task.sleep(
-                nanoseconds: 650_000_000
+                nanoseconds: 700_000_000
             )
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                return
+            }
 
-            withAnimation(.easeOut(duration: 0.16)) {
+            withAnimation(
+                .easeOut(duration: 0.16)
+            ) {
                 gestureHUD = nil
             }
         }
+    }
+
+    private func hideHUD() {
+        hudTask?.cancel()
+
+        withAnimation(
+            .easeOut(duration: 0.16)
+        ) {
+            gestureHUD = nil
+        }
+    }
+
+    private func timeString(
+        _ value: Double
+    ) -> String {
+        guard value.isFinite else {
+            return "0:00"
+        }
+
+        let seconds = max(
+            0,
+            Int(value.rounded(.down))
+        )
+
+        if seconds >= 3600 {
+            return String(
+                format: "%d:%02d:%02d",
+                seconds / 3600,
+                (seconds % 3600) / 60,
+                seconds % 60
+            )
+        }
+
+        return String(
+            format: "%d:%02d",
+            seconds / 60,
+            seconds % 60
+        )
     }
 }
