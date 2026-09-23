@@ -25,6 +25,7 @@ struct FileMannApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
+                .preferredColorScheme(.dark)
                 .onAppear {
                     _ = try? FileMannShared.inboxDirectory()
                 }
