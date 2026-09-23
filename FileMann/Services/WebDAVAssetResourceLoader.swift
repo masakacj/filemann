@@ -304,12 +304,32 @@ private final class WebDAVRangeWorker:
                 info.contentLength = totalLength
             }
 
-            if let mime = http.value(
+            let responseMIME = http.value(
                 forHTTPHeaderField: "Content-Type"
-            )?.split(separator: ";").first {
-                info.contentType = UTType(
-                    mimeType: String(mime)
-                )?.identifier
+            )?
+            .split(separator: ";")
+            .first
+            .map(String.init)
+
+            let responseType = responseMIME.flatMap {
+                UTType(mimeType: $0)
+            }
+
+            let isGenericBinary =
+                responseMIME?
+                .lowercased() ==
+                "application/octet-stream"
+
+            if let responseType,
+               !isGenericBinary {
+                info.contentType =
+                    responseType.identifier
+            } else if let fileType = UTType(
+                filenameExtension:
+                    (path as NSString).pathExtension
+            ) {
+                info.contentType =
+                    fileType.identifier
             }
 
             let acceptsRanges = http.statusCode == 206 ||
