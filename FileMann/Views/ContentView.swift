@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
+    @EnvironmentObject private var archiveViewModel: ArchiveViewModel
+
     var body: some View {
         TabView {
             MediaLibraryView()
@@ -14,6 +16,12 @@ struct ContentView: View {
                 }
         }
         .preferredColorScheme(.dark)
+        .sheet(
+            isPresented: $archiveViewModel.isShowingSettings
+        ) {
+            SettingsView()
+                .environmentObject(archiveViewModel)
+        }
     }
 }
 
@@ -73,10 +81,6 @@ private struct RemoteMediaTabView: View {
                     }
                 }
             }
-        }
-        .sheet(isPresented: $archiveViewModel.isShowingSettings) {
-            SettingsView()
-                .environmentObject(archiveViewModel)
         }
     }
 }
