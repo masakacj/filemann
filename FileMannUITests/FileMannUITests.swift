@@ -153,13 +153,16 @@ final class FileMannUITests: XCTestCase {
         )
 
         let window = app.windows.element(boundBy: 0)
-        let center = window.coordinate(
+        let right = window.coordinate(
             withNormalizedOffset: CGVector(
-                dx: 0.5,
-                dy: 0.50
+                dx: 0.82,
+                dy: 0.48
             )
         )
-        center.tap()
+
+        // Start from the paused beginning. A single right-side tap
+        // advances one frame and should reveal the transient progress UI.
+        right.tap()
 
         let progress = app
             .descendants(matching: .any)
@@ -169,21 +172,15 @@ final class FileMannUITests: XCTestCase {
             .firstMatch
         XCTAssertTrue(
             progress.waitForExistence(timeout: 2),
-            "播放操作后应显示进度条"
+            "逐帧操作后应显示进度条"
         )
 
-        // Pause before frame stepping so the time delta comes
-        // from the frame-step gesture rather than normal playback.
-        center.tap()
         let before = progressTime(progress)
 
-        let right = window.coordinate(
-            withNormalizedOffset: CGVector(
-                dx: 0.82,
-                dy: 0.48
-            )
-        )
-        right.press(forDuration: 0.7)
+        // Keep stepping forward while held. Because the clip is only
+        // about one second long, do not start normal playback first or
+        // the test can already be sitting at EOF.
+        right.press(forDuration: 0.45)
 
         XCTAssertTrue(
             progress.waitForExistence(timeout: 2)
@@ -193,7 +190,7 @@ final class FileMannUITests: XCTestCase {
         XCTAssertGreaterThan(
             after,
             before,
-            "长按右侧应逐帧前进并实时更新画面/时间"
+            "长按右侧应连续逐帧前进并实时更新时间"
         )
 
         Thread.sleep(forTimeInterval: 5.4)
