@@ -20,6 +20,7 @@ final class ArchiveViewModel: ObservableObject {
     @Published var statusMessage: String?
     @Published var connectionTestMessage: String?
     @Published var bytesPerSecond: Double = 0
+    @Published var activeWebDAVEndpoint: String?
 
     private var worker: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -248,10 +249,7 @@ final class ArchiveViewModel: ObservableObject {
     func loadRemoteDirectories(at path: String) async throws -> [SMBDirectoryEntry] {
         switch settings.transport {
         case .webDAV:
-            let service = try WebDAVArchiveService(
-                settings: settings,
-                password: webDAVPassword
-            )
+            let service = try await makeReachableWebDAVService()
             return try await service.listDirectories(at: path)
         case .smb:
             let service = try SMBArchiveService(settings: settings, password: password)
@@ -265,10 +263,7 @@ final class ArchiveViewModel: ObservableObject {
             do {
                 switch settings.transport {
                 case .webDAV:
-                    let service = try WebDAVArchiveService(
-                        settings: settings,
-                        password: webDAVPassword
-                    )
+                    let service = try await makeReachableWebDAVService()
                     try await service.testConnection()
                 case .smb:
                     let service = try SMBArchiveService(
@@ -277,7 +272,12 @@ final class ArchiveViewModel: ObservableObject {
                     )
                     try await service.testConnection()
                 }
-                connectionTestMessage = "连接成功"
+                if settings.transport == .webDAV,
+                   let activeWebDAVEndpoint {
+                    connectionTestMessage = "连接成功（\(activeWebDAVEndpoint)）"
+                } else {
+                    connectionTestMessage = "连接成功"
+                }
             } catch {
                 connectionTestMessage = "连接失败：\(error.localizedDescription)"
             }
@@ -432,10 +432,7 @@ final class ArchiveViewModel: ObservableObject {
 
         Task {
             do {
-                let service = try WebDAVArchiveService(
-                    settings: settings,
-                    password: webDAVPassword
-                )
+                let service = try await makeReachableWebDAVService()
                 try await service.connectAndPrepare()
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
@@ -725,10 +722,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         do {
-            let service = try WebDAVArchiveService(
-                settings: settings,
-                password: webDAVPassword
-            )
+            let service = try await makeReachableWebDAVService()
 
             let verification = await service.verifyManifest(tasks)
             lastVerification = verification
@@ -1019,6 +1013,24 @@ final class ArchiveViewModel: ObservableObject {
             }
             counter += 1
         }
+    }
+
+    private func makeReachableWebDAVService(
+        forceRemote: Bool = false
+    ) async throws -> WebDAVArchiveService {
+        let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
+            settings: settings,
+            password: webDAVPassword,
+            forceRemote: forceRemote
+        )
+
+        let service = try WebDAVArchiveService(
+            settings: settings,
+            password: webDAVPassword,
+            baseURLString: resolved
+        )
+        activeWebDAVEndpoint = service.endpointLabel
+        return service
     }
 
     private func isSourceAccessError(_ error: Error) -> Bool {
