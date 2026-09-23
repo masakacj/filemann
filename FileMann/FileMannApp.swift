@@ -19,7 +19,14 @@ struct FileMannApp: App {
     @UIApplicationDelegateAdaptor(FileMannAppDelegate.self)
     private var appDelegate
 
-    @StateObject private var viewModel = ArchiveViewModel()
+    @StateObject private var viewModel: ArchiveViewModel
+
+    init() {
+        UITestBootstrap.applyIfNeeded()
+        _viewModel = StateObject(
+            wrappedValue: ArchiveViewModel()
+        )
+    }
 
     var body: some Scene {
         WindowGroup {
