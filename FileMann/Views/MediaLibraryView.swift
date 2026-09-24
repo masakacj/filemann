@@ -266,6 +266,9 @@ struct MediaLibraryView: View {
                             )
                         }
                         .accessibilityLabel("更多")
+                        .accessibilityIdentifier(
+                            "media-library-more-menu"
+                        )
                     }
 
                     Button {

@@ -49,11 +49,29 @@ final class FileMannUITests: XCTestCase {
             "本地媒体页不应再显示从相册导入按钮"
         )
 
-        let moreButton = app.buttons["更多"].firstMatch
+        let moreButton = app.buttons[
+            "media-library-more-menu"
+        ].firstMatch
         XCTAssertTrue(
             moreButton.waitForExistence(timeout: 5)
         )
-        moreButton.tap()
+        XCTAssertTrue(
+            moreButton.isHittable,
+            "更多菜单按钮应可点击"
+        )
+
+        // XCUIElement.tap() may first issue an accessibility
+        // scroll-to-visible action for navigation-bar items. On the
+        // simulator this intermittently returns kAXErrorCannotComplete
+        // even though the button is already visible. Tapping the
+        // element's center coordinate exercises the same real UI
+        // without that flaky pre-scroll action.
+        moreButton.coordinate(
+            withNormalizedOffset: CGVector(
+                dx: 0.5,
+                dy: 0.5
+            )
+        ).tap()
 
         XCTAssertTrue(
             app.buttons["映射外部文件夹"]
