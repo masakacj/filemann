@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct SettingsView: View {
@@ -5,6 +6,11 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isShowingDirectoryPicker = false
+    @State private var cacheSizeBytes: Int64 = 0
+    @State private var cacheLimitMB =
+        FileMannCachePolicy.limitMB
+    @State private var isClearingCache = false
+    @State private var cacheStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -31,6 +37,7 @@ struct SettingsView: View {
                 }
 
                 connectionTestSection
+                cacheSection
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -60,6 +67,9 @@ struct SettingsView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task {
+            await refreshCacheSize()
+        }
     }
 
     private var webDAVConnections: some View {
@@ -234,6 +244,111 @@ struct SettingsView: View {
                 )
             }
         }
+    }
+
+    private var cacheSection: some View {
+        Section {
+            Picker(
+                "最大缓存大小",
+                selection: Binding(
+                    get: { cacheLimitMB },
+                    set: { updateCacheLimit($0) }
+                )
+            ) {
+                ForEach(
+                    FileMannCachePolicy.allowedLimitMB,
+                    id: \.self
+                ) { value in
+                    Text(cacheLimitTitle(value))
+                        .tag(value)
+                }
+            }
+
+            LabeledContent("当前缓存") {
+                if isClearingCache {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text(byteCountString(cacheSizeBytes))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Button(role: .destructive) {
+                clearCache()
+            } label: {
+                Label(
+                    "清理缓存",
+                    systemImage: "trash"
+                )
+            }
+            .disabled(isClearingCache)
+
+            if let cacheStatusMessage {
+                Text(cacheStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("缓存")
+        } footer: {
+            Text(
+                "只管理可重新生成的 NAS 原图、缩略图和旧版网络缓存；不会删除本地媒体、Shortcut Inbox、归档任务或 NAS 文件。超过上限后会自动按最久未使用顺序清理。"
+            )
+        }
+    }
+
+    @MainActor
+    private func updateCacheLimit(_ value: Int) {
+        cacheLimitMB = value
+        FileMannCachePolicy.limitMB = value
+        cacheStatusMessage = nil
+
+        Task {
+            await FileMannCacheManager.shared
+                .enforceLimit(force: true)
+            await refreshCacheSize()
+        }
+    }
+
+    @MainActor
+    private func clearCache() {
+        guard !isClearingCache else {
+            return
+        }
+
+        isClearingCache = true
+        cacheStatusMessage = nil
+        RemoteThumbnailStore.shared.clearMemoryCache()
+
+        Task {
+            let freed = await FileMannCacheManager.shared
+                .clearAllCache()
+            cacheSizeBytes = await FileMannCacheManager.shared
+                .currentSizeBytes()
+            cacheStatusMessage =
+                "已清理 " + byteCountString(freed)
+            isClearingCache = false
+        }
+    }
+
+    @MainActor
+    private func refreshCacheSize() async {
+        cacheSizeBytes = await FileMannCacheManager.shared
+            .currentSizeBytes()
+    }
+
+    private func cacheLimitTitle(_ value: Int) -> String {
+        value >= 1024
+            ? "\(value / 1024) GB"
+            : "\(value) MB"
+    }
+
+    private func byteCountString(_ value: Int64) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: max(0, value),
+            countStyle: .file
+        )
     }
 
     private func connectionRow(

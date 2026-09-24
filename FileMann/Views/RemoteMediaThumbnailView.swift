@@ -169,6 +169,10 @@ final class RemoteThumbnailStore: @unchecked Sendable {
         memory.countLimit = 240
     }
 
+    func clearMemoryCache() {
+        memory.removeAllObjects()
+    }
+
     func cachedImage(
         entry: RemoteMediaEntry,
         baseURLString: String,
@@ -199,6 +203,7 @@ final class RemoteThumbnailStore: @unchecked Sendable {
             image,
             forKey: key as NSString
         )
+        touch(diskURL)
         return image
     }
 
@@ -231,6 +236,7 @@ final class RemoteThumbnailStore: @unchecked Sendable {
                 image,
                 forKey: key as NSString
             )
+            touch(diskURL)
             return image
         }
 
@@ -287,6 +293,11 @@ final class RemoteThumbnailStore: @unchecked Sendable {
                 to: diskURL,
                 options: [.atomic]
             )
+            touch(diskURL)
+            Task {
+                await FileMannCacheManager.shared
+                    .enforceLimit()
+            }
         }
 
         return image
@@ -578,6 +589,13 @@ final class RemoteThumbnailStore: @unchecked Sendable {
         } ?? 1600
     }
 
+    private func touch(_ url: URL) {
+        try? fileManager.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: url.path
+        )
+    }
+
     private func thumbnailDiskURL(
         key: String
     ) -> URL {
@@ -722,6 +740,7 @@ final class RemoteOriginalImageCache: @unchecked Sendable {
             return nil
         }
 
+        touch(url)
         return url
     }
 
@@ -744,7 +763,11 @@ final class RemoteOriginalImageCache: @unchecked Sendable {
             )
         }
 
-        trimCacheIfNeeded()
+        touch(destination)
+        Task {
+            await FileMannCacheManager.shared
+                .enforceLimit()
+        }
         return destination
     }
 
@@ -777,61 +800,11 @@ final class RemoteOriginalImageCache: @unchecked Sendable {
             )
     }
 
-    private func trimCacheIfNeeded() {
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [
-                .fileSizeKey,
-                .contentModificationDateKey
-            ],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
-        }
-
-        let values: [(URL, Int64, Date)] = files.compactMap {
-            url in
-            guard let resources = try? url.resourceValues(
-                forKeys: [
-                    .fileSizeKey,
-                    .contentModificationDateKey
-                ]
-            ) else {
-                return nil
-            }
-
-            return (
-                url,
-                Int64(resources.fileSize ?? 0),
-                resources.contentModificationDate
-                    ?? .distantPast
-            )
-        }
-
-        var total = values.reduce(Int64(0)) {
-            $0 + $1.1
-        }
-
-        let highWater: Int64 =
-            640 * 1024 * 1024
-        let lowWater: Int64 =
-            480 * 1024 * 1024
-
-        guard total > highWater else {
-            return
-        }
-
-        for value in values.sorted(
-            by: { $0.2 < $1.2 }
-        ) {
-            try? fileManager.removeItem(
-                at: value.0
-            )
-            total -= value.1
-
-            if total <= lowWater {
-                break
-            }
-        }
+    private func touch(_ url: URL) {
+        try? fileManager.setAttributes(
+            [.modificationDate: Date()],
+            ofItemAtPath: url.path
+        )
     }
+
 }

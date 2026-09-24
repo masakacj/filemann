@@ -103,6 +103,9 @@ final class WebDAVArchiveService {
         self.sessionDelegate = delegate
 
         let configuration = URLSessionConfiguration.default
+        configuration.urlCache = nil
+        configuration.requestCachePolicy =
+            .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 300
         configuration.allowsCellularAccess =

@@ -36,6 +36,10 @@ struct FileMannApp: App {
                 .onAppear {
                     _ = try? FileMannShared.inboxDirectory()
                 }
+                .task {
+                    await FileMannCacheManager.shared
+                        .prepareAtLaunch()
+                }
         }
     }
 }
