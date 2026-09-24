@@ -55,7 +55,7 @@ jobs:
           icon = Path("FileMann/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png")
           data = icon.read_bytes()
           assert data[:8] == b"\\x89PNG\\r\\n\\x1a\\n"
-          width, height, depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", data[24:37])
+          width, height, depth, color_type, _, _, _ = struct.unpack(">IIBBBBB", data[16:29])
           assert (width, height, depth, color_type) == (1024, 1024, 8, 2)
           print(f"Verified AppIcon: {width}x{height}, 24-bit RGB, opaque")
           PY

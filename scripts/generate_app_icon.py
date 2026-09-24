@@ -132,7 +132,7 @@ def verify_png(data: bytes) -> None:
     if data[:8] != b"\x89PNG\r\n\x1a\n":
         raise RuntimeError("Generated AppIcon is not a PNG")
     width, height, depth, color_type, compression, filtering, interlace = struct.unpack(
-        ">IIBBBBB", data[24:37]
+        ">IIBBBBB", data[16:29]
     )
     if (width, height) != (1024, 1024):
         raise RuntimeError(f"Unexpected AppIcon dimensions: {width}x{height}")
