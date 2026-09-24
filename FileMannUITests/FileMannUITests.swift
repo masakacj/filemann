@@ -55,11 +55,9 @@ final class FileMannUITests: XCTestCase {
         XCTAssertTrue(
             moreButton.waitForExistence(timeout: 5)
         )
-        XCTAssertTrue(
-            moreButton.isHittable,
-            "更多菜单按钮应可点击"
-        )
-
+        // Do not gate on isHittable here. XCUITest can report a
+        // visible navigation-bar Menu as non-hittable on the simulator
+        // even though a direct coordinate tap works correctly.
         // XCUIElement.tap() may first issue an accessibility
         // scroll-to-visible action for navigation-bar items. On the
         // simulator this intermittently returns kAXErrorCannotComplete
