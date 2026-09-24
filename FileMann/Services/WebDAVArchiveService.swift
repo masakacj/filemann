@@ -5,6 +5,7 @@ enum WebDAVArchiveError: LocalizedError {
     case invalidBaseURL
     case noReachableEndpoint
     case unexpectedStatus(Int)
+    case forbidden(operation: String, path: String)
     case remoteConflict(String)
     case remoteVerificationFailed
     case sourceUnavailable
@@ -20,6 +21,11 @@ enum WebDAVArchiveError: LocalizedError {
             return "本地和远程 WebDAV 地址都无法连接"
         case .unexpectedStatus(let code):
             return "WebDAV 返回 HTTP \(code)"
+        case .forbidden(let operation, let path):
+            let target = path.isEmpty || path.hasPrefix("/")
+                ? (path.isEmpty ? "/" : path)
+                : "/\(path)"
+            return "NAS 拒绝\(operation)（HTTP 403）：\(target)。请确认归档目录是 QNAP 共享文件夹，并且当前账号具有读写权限。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -454,6 +460,13 @@ final class WebDAVArchiveService {
         applyAuthorization(to: &request)
 
         let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse,
+           http.statusCode == 403 {
+            throw WebDAVArchiveError.forbidden(
+                operation: "完成文件落盘",
+                path: finalPath
+            )
+        }
         try validate(response, accepted: [201, 204])
 
         guard await remoteFileSize(atPath: finalPath) == expectedBytes else {
@@ -741,6 +754,13 @@ final class WebDAVArchiveService {
             let (_, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw WebDAVArchiveError.invalidResponse
+            }
+
+            if http.statusCode == 403 {
+                throw WebDAVArchiveError.forbidden(
+                    operation: "创建目录",
+                    path: current
+                )
             }
 
             guard [200, 201, 204, 405]

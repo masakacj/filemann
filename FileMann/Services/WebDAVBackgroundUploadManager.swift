@@ -273,6 +273,19 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
             return
         }
 
+        if let response = task.response as? HTTPURLResponse,
+           response.statusCode == 403 {
+            let path = descriptor.finalPath.hasPrefix("/")
+                ? descriptor.finalPath
+                : "/\(descriptor.finalPath)"
+            postFailure(
+                taskID: descriptor.taskID,
+                message:
+                    "NAS 拒绝上传（HTTP 403）：\(path)。请确认已选择 QNAP 共享文件夹，并且当前账号具有写权限。"
+            )
+            return
+        }
+
         guard let response = task.response as? HTTPURLResponse,
               (200...299).contains(response.statusCode) else {
             let status = (task.response as? HTTPURLResponse)?.statusCode ?? -1

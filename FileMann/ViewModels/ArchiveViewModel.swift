@@ -274,7 +274,12 @@ final class ArchiveViewModel: ObservableObject {
                 }
                 if settings.transport == .webDAV,
                    let activeWebDAVEndpoint {
-                    connectionTestMessage = "连接成功（\(activeWebDAVEndpoint)）"
+                    if settings.hasWebDAVArchiveDirectory {
+                        connectionTestMessage = "连接成功（\(activeWebDAVEndpoint)）"
+                    } else {
+                        connectionTestMessage =
+                            "连接成功（\(activeWebDAVEndpoint)）；请继续选择 QNAP 共享文件夹作为归档目录"
+                    }
                 } else {
                     connectionTestMessage = "连接成功"
                 }
@@ -403,6 +408,13 @@ final class ArchiveViewModel: ObservableObject {
     private func startWebDAV() {
         guard settings.isValid else {
             statusMessage = "请先配置 QNAP WebDAV 地址"
+            isShowingSettings = true
+            return
+        }
+
+        guard settings.hasWebDAVArchiveDirectory else {
+            statusMessage =
+                "请先选择 QNAP 共享文件夹作为归档目录；WebDAV 根目录 / 只能用于浏览，不能直接归档"
             isShowingSettings = true
             return
         }

@@ -59,6 +59,19 @@ final class SMBSettingsTests: XCTestCase {
         )
     }
 
+    func testWebDAVArchiveDirectoryConfiguration() {
+        var settings = SMBSettings()
+        XCTAssertFalse(settings.hasWebDAVArchiveDirectory)
+
+        settings.webDAVRemoteDirectory = " /Public/Archive/ "
+
+        XCTAssertTrue(settings.hasWebDAVArchiveDirectory)
+        XCTAssertEqual(
+            settings.normalizedWebDAVDirectory,
+            "Public/Archive"
+        )
+    }
+
     func testConnectionTitlesFollowResolvedURL() {
         var settings = SMBSettings()
         settings.webDAVLocalTitle = "Home"

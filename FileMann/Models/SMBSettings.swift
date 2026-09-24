@@ -81,6 +81,10 @@ struct SMBSettings: Codable, Equatable {
         )
     }
 
+    var hasWebDAVArchiveDirectory: Bool {
+        !normalizedWebDAVDirectory.isEmpty
+    }
+
     var normalizedWebDAVBaseURL: String {
         let composed = Self.composeWebDAVURL(
             host: webDAVLocalHost,
