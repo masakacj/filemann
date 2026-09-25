@@ -190,3 +190,18 @@ NAS
 - NAS 原图、NAS 缩略图统一计入总上限，超过上限后按最久未使用顺序自动淘汰。
 - 启动时会清理旧版本遗留的 URLSession 网络磁盘缓存。
 - 清理缓存不会删除本地媒体库、Shortcut Inbox、归档任务或 NAS 文件。
+
+
+## 存储占用
+
+设置页会分别显示：
+
+- FileMann 私有本地媒体（Application Support / FileMann / Media / Originals）
+- Shortcut Inbox
+- NAS 图片/缩略图缓存
+- 元数据与临时文件
+- 可管理合计
+
+“清理 NAS 缓存”只清可重建缓存；如果 iPhone“存储空间”仍显示数 GB，通常是历史导入到 FileMann 私有媒体库的原图/视频。
+
+可通过“删除 FileMann 本地媒体”单独清理这些文件。存在未完成归档任务时，该操作会被禁用，避免误删仍待上传的源文件。外部映射文件夹和 NAS 文件不会被删除。

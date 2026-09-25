@@ -6,11 +6,18 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isShowingDirectoryPicker = false
-    @State private var cacheSizeBytes: Int64 = 0
     @State private var cacheLimitMB =
         FileMannCachePolicy.limitMB
     @State private var isClearingCache = false
     @State private var cacheStatusMessage: String?
+    @State private var storageSnapshot =
+        FileMannStorageSnapshot()
+    @State private var isRefreshingStorage = false
+    @State private var isClearingLocalMedia = false
+    @State private var isClearingInbox = false
+    @State private var showClearLocalMediaConfirmation = false
+    @State private var showClearInboxConfirmation = false
+    @State private var storageStatusMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -37,7 +44,7 @@ struct SettingsView: View {
                 }
 
                 connectionTestSection
-                cacheSection
+                storageSection
             }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
@@ -68,7 +75,41 @@ struct SettingsView: View {
         }
         .preferredColorScheme(.dark)
         .task {
-            await refreshCacheSize()
+            await refreshStorage()
+        }
+        .confirmationDialog(
+            "删除 FileMann 本地媒体？",
+            isPresented: $showClearLocalMediaConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                "删除 (byteCountString(storageSnapshot.localMediaBytes))",
+                role: .destructive
+            ) {
+                clearLocalMedia()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "只删除 FileMann 私有媒体库中的图片/视频及其编辑元数据。不会删除 NAS 文件，也不会删除已映射的外部文件夹内容。iOS“存储空间”中的数字可能需要几分钟才会刷新。"
+            )
+        }
+        .confirmationDialog(
+            "清空 Shortcut Inbox？",
+            isPresented: $showClearInboxConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                "删除 (byteCountString(storageSnapshot.shortcutInboxBytes))",
+                role: .destructive
+            ) {
+                clearShortcutInbox()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "只删除“我的 iPhone / FileMann / Shortcut Inbox”中仍残留的文件。"
+            )
         }
     }
 
@@ -246,10 +287,74 @@ struct SettingsView: View {
         }
     }
 
-    private var cacheSection: some View {
+    private var storageSection: some View {
         Section {
+            LabeledContent("FileMann 本地媒体") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.localMediaBytes
+                    )
+                )
+                .foregroundStyle(
+                    storageSnapshot.localMediaBytes > 0
+                        ? .primary
+                        : .secondary
+                )
+            }
+
+            LabeledContent("Shortcut Inbox") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.shortcutInboxBytes
+                    )
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("NAS 缓存") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.cacheBytes
+                    )
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("元数据 / 临时文件") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.otherBytes
+                    )
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("可管理合计") {
+                if isRefreshingStorage {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text(
+                        byteCountString(
+                            storageSnapshot.managedBytes
+                        )
+                    )
+                    .fontWeight(.semibold)
+                }
+            }
+
+            Button {
+                refreshStorageTask()
+            } label: {
+                Label(
+                    "重新计算占用",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+            .disabled(isRefreshingStorage)
+
             Picker(
-                "最大缓存大小",
+                "最大 NAS 缓存",
                 selection: Binding(
                     get: { cacheLimitMB },
                     set: { updateCacheLimit($0) }
@@ -264,37 +369,87 @@ struct SettingsView: View {
                 }
             }
 
-            LabeledContent("当前缓存") {
-                if isClearingCache {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Text(byteCountString(cacheSizeBytes))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Button(role: .destructive) {
+            Button {
                 clearCache()
             } label: {
                 Label(
-                    "清理缓存",
+                    "清理 NAS 缓存",
                     systemImage: "trash"
                 )
             }
             .disabled(isClearingCache)
+
+            if storageSnapshot.localMediaBytes > 0 {
+                Button(role: .destructive) {
+                    showClearLocalMediaConfirmation = true
+                } label: {
+                    Label(
+                        "删除 FileMann 本地媒体",
+                        systemImage:
+                            "externaldrive.badge.xmark"
+                    )
+                }
+                .disabled(
+                    isClearingLocalMedia ||
+                    hasPendingArchiveWork
+                )
+            }
+
+            if storageSnapshot.shortcutInboxBytes > 0 {
+                Button(role: .destructive) {
+                    showClearInboxConfirmation = true
+                } label: {
+                    Label(
+                        "清空 Shortcut Inbox",
+                        systemImage:
+                            "tray.and.arrow.down.fill"
+                    )
+                }
+                .disabled(isClearingInbox)
+            }
+
+            if hasPendingArchiveWork &&
+               storageSnapshot.localMediaBytes > 0 {
+                Text(
+                    "存在未完成的归档任务。为避免删除仍待上传的源文件，暂时禁用“删除 FileMann 本地媒体”。"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
 
             if let cacheStatusMessage {
                 Text(cacheStatusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if let storageStatusMessage {
+                Text(storageStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
-            Text("缓存")
+            Text("存储占用")
         } footer: {
             Text(
-                "只管理可重新生成的 NAS 原图、缩略图和旧版网络缓存；不会删除本地媒体、Shortcut Inbox、归档任务或 NAS 文件。超过上限后会自动按最久未使用顺序清理。"
+                "iPhone“存储空间”里的“文稿与数据”不仅包含缓存，也包含 FileMann 私有媒体库中的原始图片/视频。清理 NAS 缓存不会删除这些本地媒体；外部映射文件夹和 NAS 文件始终不会被这里的清理操作删除。"
             )
+        }
+    }
+
+    private var hasPendingArchiveWork: Bool {
+        viewModel.tasks.contains { task in
+            switch task.state {
+            case .queued,
+                 .uploading,
+                 .paused,
+                 .failed:
+                return true
+            case .completed,
+                 .skipped,
+                 .missingSource:
+                return false
+            }
         }
     }
 
@@ -307,7 +462,7 @@ struct SettingsView: View {
         Task {
             await FileMannCacheManager.shared
                 .enforceLimit(force: true)
-            await refreshCacheSize()
+            await refreshStorage()
         }
     }
 
@@ -324,18 +479,76 @@ struct SettingsView: View {
         Task {
             let freed = await FileMannCacheManager.shared
                 .clearAllCache()
-            cacheSizeBytes = await FileMannCacheManager.shared
-                .currentSizeBytes()
             cacheStatusMessage =
-                "已清理 " + byteCountString(freed)
+                "已清理 NAS 缓存 " +
+                byteCountString(freed)
             isClearingCache = false
+            await refreshStorage()
         }
     }
 
     @MainActor
-    private func refreshCacheSize() async {
-        cacheSizeBytes = await FileMannCacheManager.shared
-            .currentSizeBytes()
+    private func clearLocalMedia() {
+        guard !isClearingLocalMedia,
+              !hasPendingArchiveWork else {
+            return
+        }
+
+        isClearingLocalMedia = true
+        storageStatusMessage = nil
+
+        Task {
+            let freed =
+                await FileMannStorageManager.shared
+                    .clearLocalMedia()
+            storageStatusMessage =
+                "已删除 FileMann 本地媒体 " +
+                byteCountString(freed) +
+                "。iOS 存储统计可能稍后才更新。"
+            isClearingLocalMedia = false
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func clearShortcutInbox() {
+        guard !isClearingInbox else {
+            return
+        }
+
+        isClearingInbox = true
+        storageStatusMessage = nil
+
+        Task {
+            let freed =
+                await FileMannStorageManager.shared
+                    .clearShortcutInbox()
+            storageStatusMessage =
+                "已清理 Shortcut Inbox " +
+                byteCountString(freed)
+            isClearingInbox = false
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func refreshStorageTask() {
+        Task {
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func refreshStorage() async {
+        guard !isRefreshingStorage else {
+            return
+        }
+
+        isRefreshingStorage = true
+        storageSnapshot =
+            await FileMannStorageManager.shared
+                .snapshot()
+        isRefreshingStorage = false
     }
 
     private func cacheLimitTitle(_ value: Int) -> String {
