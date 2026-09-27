@@ -18,6 +18,10 @@ struct SettingsView: View {
     @State private var showClearLocalMediaConfirmation = false
     @State private var showClearInboxConfirmation = false
     @State private var storageStatusMessage: String?
+    @State private var isClearingSystemCache = false
+    @State private var isClearingLegacyGroup = false
+    @State private var showClearSystemCacheConfirmation = false
+    @State private var showClearLegacyGroupConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -83,7 +87,7 @@ struct SettingsView: View {
             titleVisibility: .visible
         ) {
             Button(
-                "删除 (byteCountString(storageSnapshot.localMediaBytes))",
+                "删除 \(byteCountString(storageSnapshot.localMediaBytes))",
                 role: .destructive
             ) {
                 clearLocalMedia()
@@ -100,7 +104,7 @@ struct SettingsView: View {
             titleVisibility: .visible
         ) {
             Button(
-                "删除 (byteCountString(storageSnapshot.shortcutInboxBytes))",
+                "删除 \(byteCountString(storageSnapshot.shortcutInboxBytes))",
                 role: .destructive
             ) {
                 clearShortcutInbox()
@@ -109,6 +113,40 @@ struct SettingsView: View {
         } message: {
             Text(
                 "只删除“我的 iPhone / FileMann / Shortcut Inbox”中仍残留的文件。"
+            )
+        }
+        .confirmationDialog(
+            "清理系统 / 后台缓存？",
+            isPresented: $showClearSystemCacheConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                "清理 \(byteCountString(storageSnapshot.systemCacheBytes))",
+                role: .destructive
+            ) {
+                clearSystemCache()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "会清理 FileMann 沙盒 Library/Caches 中的可重建数据，包括可能由后台 URLSession 遗留的数据。存在未完成归档任务时不会允许执行。"
+            )
+        }
+        .confirmationDialog(
+            "清理旧版 App Group 媒体？",
+            isPresented: $showClearLegacyGroupConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                "删除 \(byteCountString(storageSnapshot.legacyAppGroupMediaBytes))",
+                role: .destructive
+            ) {
+                clearLegacyGroup()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "旧版 FileMann 曾把原始媒体保存在 group.com.masakacj.filemann/Media。这个操作只在当前签名仍有该 App Group 权限时可用，并会永久删除旧共享容器里的媒体。"
             )
         }
     }
@@ -343,6 +381,75 @@ struct SettingsView: View {
                 }
             }
 
+            LabeledContent("当前 App 沙盒总计") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.sandboxBytes
+                    )
+                )
+                .fontWeight(.semibold)
+            }
+
+            LabeledContent("未归类沙盒") {
+                Text(
+                    byteCountString(
+                        storageSnapshot
+                            .unclassifiedSandboxBytes
+                    )
+                )
+                .foregroundStyle(
+                    storageSnapshot
+                        .unclassifiedSandboxBytes >
+                        100 * 1024 * 1024
+                        ? .orange
+                        : .secondary
+                )
+            }
+
+            LabeledContent("Documents 总计") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.documentsBytes
+                    )
+                )
+                .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("Library/Caches 总计") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.totalCachesBytes
+                    )
+                )
+                .foregroundStyle(
+                    storageSnapshot.systemCacheBytes >
+                        100 * 1024 * 1024
+                        ? .orange
+                        : .secondary
+                )
+            }
+
+            LabeledContent("旧版 App Group") {
+                if storageSnapshot
+                    .legacyAppGroupAvailable {
+                    Text(
+                        byteCountString(
+                            storageSnapshot
+                                .legacyAppGroupBytes
+                        )
+                    )
+                    .foregroundStyle(
+                        storageSnapshot
+                            .legacyAppGroupBytes > 0
+                            ? .orange
+                            : .secondary
+                    )
+                } else {
+                    Text("当前签名无权限")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Button {
                 refreshStorageTask()
             } label: {
@@ -378,6 +485,40 @@ struct SettingsView: View {
                 )
             }
             .disabled(isClearingCache)
+
+            if storageSnapshot.systemCacheBytes >
+                1024 * 1024 {
+                Button(role: .destructive) {
+                    showClearSystemCacheConfirmation =
+                        true
+                } label: {
+                    Label(
+                        "清理系统 / 后台缓存",
+                        systemImage:
+                            "externaldrive.badge.minus"
+                    )
+                }
+                .disabled(
+                    isClearingSystemCache ||
+                    hasPendingArchiveWork
+                )
+            }
+
+            if storageSnapshot
+                .legacyAppGroupAvailable &&
+               storageSnapshot
+                .legacyAppGroupMediaBytes > 0 {
+                Button(role: .destructive) {
+                    showClearLegacyGroupConfirmation =
+                        true
+                } label: {
+                    Label(
+                        "清理旧版 App Group 媒体",
+                        systemImage: "archivebox"
+                    )
+                }
+                .disabled(isClearingLegacyGroup)
+            }
 
             if storageSnapshot.localMediaBytes > 0 {
                 Button(role: .destructive) {
@@ -417,6 +558,15 @@ struct SettingsView: View {
                 .foregroundStyle(.orange)
             }
 
+            if !storageSnapshot
+                .legacyAppGroupAvailable {
+                Text(
+                    "历史版本曾使用 App Group“group.com.masakacj.filemann”存储媒体。若 iPhone“存储空间”明显大于“当前 App 沙盒总计”，差额很可能来自当前签名无权访问的旧共享容器。"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+
             if let cacheStatusMessage {
                 Text(cacheStatusMessage)
                     .font(.caption)
@@ -432,7 +582,7 @@ struct SettingsView: View {
             Text("存储占用")
         } footer: {
             Text(
-                "iPhone“存储空间”里的“文稿与数据”不仅包含缓存，也包含 FileMann 私有媒体库中的原始图片/视频。清理 NAS 缓存不会删除这些本地媒体；外部映射文件夹和 NAS 文件始终不会被这里的清理操作删除。"
+                "“当前 App 沙盒总计”会扫描 Documents、Library 与 tmp；“未归类沙盒”可发现旧路径或系统数据。早期 FileMann 还使用过 App Group 共享容器，它不属于当前 App 沙盒，且只有带对应 entitlement 的签名才能访问。"
             )
         }
     }
@@ -527,6 +677,51 @@ struct SettingsView: View {
                 "已清理 Shortcut Inbox " +
                 byteCountString(freed)
             isClearingInbox = false
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func clearSystemCache() {
+        guard !isClearingSystemCache,
+              !hasPendingArchiveWork else {
+            return
+        }
+
+        isClearingSystemCache = true
+        storageStatusMessage = nil
+        RemoteThumbnailStore.shared.clearMemoryCache()
+
+        Task {
+            let freed =
+                await FileMannStorageManager.shared
+                    .clearSystemCaches()
+            storageStatusMessage =
+                "已清理系统 / 后台缓存 " +
+                byteCountString(freed)
+            isClearingSystemCache = false
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func clearLegacyGroup() {
+        guard !isClearingLegacyGroup else {
+            return
+        }
+
+        isClearingLegacyGroup = true
+        storageStatusMessage = nil
+
+        Task {
+            let freed =
+                await FileMannStorageManager.shared
+                    .clearLegacyAppGroupMedia()
+            storageStatusMessage =
+                "已清理旧版 App Group 媒体 " +
+                byteCountString(freed) +
+                "。iOS 存储统计可能稍后更新。"
+            isClearingLegacyGroup = false
             await refreshStorage()
         }
     }
