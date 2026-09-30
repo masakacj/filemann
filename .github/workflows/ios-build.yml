@@ -183,9 +183,9 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
-          READY="$(curl -fsS https://ipa.78175132.xyz/api/health | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("credentials") else "0")')"
+          READY="$(curl -fsS https://ipa.78175132.xyz/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print("1" if (d.get("apps") or {}).get("filemann",{}).get("signing_ready") else "0")')"
           if [[ "$READY" != "1" ]]; then
-            echo "Remote signer has not been provisioned yet; keeping unsigned build only."
+            echo "No provisioning profile currently authorizes com.masakacj.filemann; keeping unsigned build only."
             exit 0
           fi
           OIDC_TOKEN="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ipa-signer" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
