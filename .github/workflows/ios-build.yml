@@ -15,7 +15,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write
+  actions: read
 
 concurrency:
   group: filemann-ios-${{ github.ref }}
@@ -181,6 +181,8 @@ jobs:
 
       - name: Sign and publish to IPA install center
         if: github.ref == 'refs/heads/main'
+        env:
+          GH_RUN_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           READY="$(curl -fsS https://ipa.78175132.xyz/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print("1" if (d.get("apps") or {}).get("filemann",{}).get("signing_ready") else "0")')"
@@ -188,10 +190,12 @@ jobs:
             echo "No provisioning profile currently authorizes com.masakacj.filemann; keeping unsigned build only."
             exit 0
           fi
-          OIDC_TOKEN="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ipa-signer" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
           curl --fail-with-body --retry 3 --retry-all-errors \
             -X POST \
-            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Authorization: Bearer $GH_RUN_TOKEN" \
+            -H "X-GitHub-Repository: $GITHUB_REPOSITORY" \
+            -H "X-GitHub-Run-Id: $GITHUB_RUN_ID" \
+            -H "X-GitHub-Sha: $GITHUB_SHA" \
             -H "X-App-Key: filemann" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @"$PWD/build/FileMann-unsigned.ipa" \
