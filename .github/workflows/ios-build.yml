@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: filemann-ios-${{ github.ref }}
@@ -177,6 +178,25 @@ jobs:
           test ! -e "$APP/PlugIns/FileMannShare.appex"
           test ! -e "$APP/_CodeSignature"
           shasum -a 256 "$PWD/build/FileMann-unsigned.ipa"
+
+      - name: Sign and publish to IPA install center
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS https://ipa.78175132.xyz/api/health | python3 -c 'import json,sys; print("1" if json.load(sys.stdin).get("credentials") else "0")')"
+          if [[ "$READY" != "1" ]]; then
+            echo "Remote signer has not been provisioned yet; keeping unsigned build only."
+            exit 0
+          fi
+          OIDC_TOKEN="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=ipa-signer" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+          curl --fail-with-body --retry 3 --retry-all-errors \
+            -X POST \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "X-App-Key: filemann" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"$PWD/build/FileMann-unsigned.ipa" \
+            https://ipa.78175132.xyz/api/v1/sign \
+            | tee "$PWD/build/remote-sign-result.json"
 
       - name: Publish latest verified unsigned IPA
         if: github.ref == 'refs/heads/main'
