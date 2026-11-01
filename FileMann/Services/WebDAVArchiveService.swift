@@ -842,6 +842,14 @@ final class WebDAVArchiveService {
         let normalized = normalize(path)
         guard !normalized.isEmpty else { return }
 
+        // Some NAS shares allow direct access to the selected destination
+        // but forbid browsing its parent folders. A parent-first PROPFIND
+        // would incorrectly fail with HTTP 403 even when the final folder
+        // is writable. Probe the exact destination first.
+        if try await remoteExists(atPath: normalized) {
+            return
+        }
+
         var current = ""
         for component in normalized
             .split(separator: "/")
