@@ -352,7 +352,21 @@ final class ArchiveViewModel: ObservableObject {
                 password = remote.smb?.password ?? password
                 settings = updated
                 TaskStore.saveSettings(updated)
-                configCenterStatus = "配置已从中心同步；离线沿用上次配置"
+                var missing: [String] = []
+                if updated.normalizedWebDAVRemoteBaseURL.isEmpty {
+                    missing.append("外网 WebDAV 地址")
+                }
+                if !updated.hasWebDAVArchiveDirectory {
+                    missing.append("归档目录")
+                }
+                if updated.webDAVUsername.isEmpty ||
+                    webDAVPassword.isEmpty {
+                    missing.append("NAS 账号凭据")
+                }
+                configCenterStatus = missing.isEmpty
+                    ? "配置同步完成，内外网已就绪；离线沿用上次配置"
+                    : "已同步已有配置；服务端待补齐：" +
+                        missing.joined(separator: "、")
             } catch {
                 configCenterStatus =
                     "同步失败：\(error.localizedDescription)。原配置保持不变"
