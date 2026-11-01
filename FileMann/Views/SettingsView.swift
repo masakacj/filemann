@@ -377,6 +377,18 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
             }
 
+            LabeledContent("相册分享临时暂存") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.shareStagingBytes
+                    )
+                )
+                .foregroundStyle(
+                    storageSnapshot.shareStagingBytes > 0
+                        ? .orange : .secondary
+                )
+            }
+
             LabeledContent("NAS 缓存") {
                 Text(
                     byteCountString(
