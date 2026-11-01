@@ -131,6 +131,33 @@ final class SMBSettingsTests: XCTestCase {
         }
     }
 
+    func testWebDAVShareRootURLCanBeArchiveDestination() async throws {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVLocalPath = "/Album"
+        XCTAssertTrue(settings.hasWebDAVArchiveDirectory)
+
+        let service = try WebDAVArchiveService(
+            settings: settings,
+            password: "filemann-pass"
+        )
+        // The mock supports PUT/MOVE/DELETE in /Album, even when the
+        // relative archive subfolder is empty.
+        try await service.testConnection()
+    }
+
+    func testBareNASRootIsNotWritableArchiveDestination() async throws {
+        let service = try mockWebDAVService(directory: "")
+        do {
+            try await service.testConnection()
+            XCTFail("NAS site root cannot be used as archive folder")
+        } catch WebDAVArchiveError.missingArchiveDestination {
+            // Confirm an explicit unsafe-root error, not an implicit 403.
+        }
+    }
+
     func testWriteCheckSucceedsForWritableDirectory() async throws {
         let service = try mockWebDAVService(directory: "Album")
         try await service.testConnection()
