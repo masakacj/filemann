@@ -197,6 +197,12 @@ class Handler(BaseHTTPRequestHandler):
                 )
         elif path == "/ReadOnly":
             add_response("/ReadOnly/", collection=True)
+        elif path == "/ParentDenied":
+            # A NAS may grant the target folder but not listing its parent.
+            self.send_error(403, "Parent directory cannot be listed")
+            return
+        elif path == "/ParentDenied/Upload":
+            add_response("/ParentDenied/Upload/", collection=True)
         elif path == "/Album":
             add_response("/Album/", collection=True)
             if depth != "0":
