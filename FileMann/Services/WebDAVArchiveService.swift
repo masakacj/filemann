@@ -6,6 +6,7 @@ enum WebDAVArchiveError: LocalizedError {
     case noReachableEndpoint
     case unexpectedStatus(Int)
     case forbidden(operation: String, path: String)
+    case duplicateArchiveDirectory(base: String, directory: String)
     case remoteConflict(String)
     case remoteVerificationFailed
     case sourceUnavailable
@@ -26,6 +27,8 @@ enum WebDAVArchiveError: LocalizedError {
                 ? (path.isEmpty ? "/" : path)
                 : "/\(path)"
             return "WebDAV 拒绝\(operation)（HTTP 403）：\(target)。请核对共享文件夹路径与账号权限；通过远程代理访问时，还需确认代理允许该请求方法。"
+        case .duplicateArchiveDirectory(let base, let directory):
+            return "WebDAV 路径重复：服务地址已包含 \(base)，归档子目录又包含 \(directory)。请将共享名或目录前缀只填写一次，以免 PUT/MKCOL 被拒绝。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -248,7 +251,28 @@ final class WebDAVArchiveService {
         }
     }
 
+    /// The WebDAV root URL and the archive directory must not both include
+    /// the same share/path prefix. nPlayer can browse a share-root URL, but
+    /// appending that path twice makes writes target a different location.
+    private func ensureNoDuplicatedArchivePrefix() throws {
+        let base = baseURL.path
+            .split(separator: "/").map { String($0).lowercased() }
+        let directory = settings.normalizedWebDAVDirectory
+            .split(separator: "/").map { String($0).lowercased() }
+        guard !base.isEmpty, !directory.isEmpty else { return }
+        let limit = min(base.count, directory.count)
+        for count in 1...limit {
+            if Array(base.suffix(count)) == Array(directory.prefix(count)) {
+                throw WebDAVArchiveError.duplicateArchiveDirectory(
+                    base: baseURL.path,
+                    directory: settings.normalizedWebDAVDirectory
+                )
+            }
+        }
+    }
+
     func connectAndPrepare() async throws {
+        try ensureNoDuplicatedArchivePrefix()
         _ = try await propfind(path: "", depth: "0")
         try await ensureDirectory(settings.normalizedWebDAVDirectory)
     }
