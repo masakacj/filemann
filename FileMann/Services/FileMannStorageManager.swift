@@ -88,11 +88,9 @@ actor FileMannStorageManager {
                 "Media",
                 isDirectory: true
             )
-        let sharedIncoming = legacyGroup?
-            .appendingPathComponent(
-                "Incoming-Share",
-                isDirectory: true
-            )
+        let sharedIncoming = try? FileMannShareGroup.incomingDirectory(
+            createIfMissing: false
+        )
 
         return FileMannStorageSnapshot(
             localMediaBytes: localMedia,
