@@ -14,6 +14,11 @@ struct ContentView: View {
                 .tabItem {
                     Label("NAS", systemImage: "externaldrive.fill")
                 }
+
+            TransferQueueView()
+                .tabItem {
+                    Label("传输", systemImage: "arrow.up.arrow.down")
+                }
         }
         .preferredColorScheme(.dark)
         .sheet(
