@@ -72,6 +72,65 @@ final class SMBSettingsTests: XCTestCase {
         )
     }
 
+    func testSMBURLWithNASShareAndFolder() {
+        var settings = SMBSettings()
+        settings.host = "smb://192.168.233.233/storage/Documentsf/Apps"
+        XCTAssertEqual(settings.normalizedHost, "192.168.233.233")
+        XCTAssertEqual(settings.normalizedShare, "storage")
+        XCTAssertEqual(settings.normalizedDirectory, "Documentsf/Apps")
+        XCTAssertEqual(
+            settings.smbConnectionSummary,
+            "smb://192.168.233.233/storage/Documentsf/Apps"
+        )
+    }
+
+    func testWindowsUNCPathConvertsToShare() {
+        var settings = SMBSettings()
+        settings.host = #"\\192.168.233.233\storage\Documentsf\Apps"#
+        XCTAssertEqual(settings.normalizedHost, "192.168.233.233")
+        XCTAssertEqual(settings.normalizedShare, "storage")
+        XCTAssertEqual(settings.normalizedDirectory, "Documentsf/Apps")
+    }
+
+    func testShareFieldContainingFolderDoesNotBecomeShareName() {
+        var settings = SMBSettings()
+        settings.host = "192.168.233.233"
+        settings.share = "storage/Documentsf/Apps"
+        XCTAssertEqual(settings.normalizedShare, "storage")
+        XCTAssertEqual(settings.normalizedDirectory, "Documentsf/Apps")
+    }
+
+    func testPlainSMBHostShareAndExplicitDirectory() {
+        var settings = SMBSettings()
+        settings.host = "192.168.233.233"
+        settings.share = "storage"
+        settings.remoteDirectory = "Documentsf/Apps"
+        XCTAssertEqual(settings.normalizedHost, "192.168.233.233")
+        XCTAssertEqual(settings.normalizedShare, "storage")
+        XCTAssertEqual(settings.normalizedDirectory, "Documentsf/Apps")
+    }
+
+    func testWebDAVRejectsDuplicatedRootBeforeNetworkWrite() async throws {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVLocalPath = "/storage"
+        settings.webDAVRemoteDirectory = "storage/Documentsf/Apps"
+
+        let service = try WebDAVArchiveService(
+            settings: settings,
+            password: "none"
+        )
+        do {
+            try await service.connectAndPrepare()
+            XCTFail("Duplicated archive path must be rejected")
+        } catch WebDAVArchiveError.duplicateArchiveDirectory(let base, let directory) {
+            XCTAssertEqual(base, "/storage")
+            XCTAssertEqual(directory, "storage/Documentsf/Apps")
+        }
+    }
+
     func testWriteCheckSucceedsForWritableDirectory() async throws {
         let service = try mockWebDAVService(directory: "Album")
         try await service.testConnection()
@@ -108,7 +167,7 @@ final class SMBSettingsTests: XCTestCase {
         let config = try JSONDecoder().decode(
             FileMannRemoteConfig.self,
             from: Data("""
-            {"webdav":{"localURL":"http://192.168.233.201:8900"},
+            {"webdav":{"localURL":"http://192.168.233.233:8900"},
              "transfer":{"transport":"webDAV","deleteAfterArchive":false}}
             """.utf8)
         )
@@ -118,7 +177,7 @@ final class SMBSettingsTests: XCTestCase {
         let result = try config.applying(to: existing)
         XCTAssertEqual(
             result.normalizedWebDAVBaseURL,
-            "http://192.168.233.201:8900"
+            "http://192.168.233.233:8900"
         )
         XCTAssertEqual(result.webDAVUsername, "preserve-user")
         XCTAssertEqual(result.normalizedWebDAVDirectory, "Shared/MyFiles")
