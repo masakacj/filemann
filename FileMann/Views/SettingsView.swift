@@ -76,6 +76,24 @@ struct SettingsView: View {
                 }
 
                 connectionTestSection
+
+                Section {
+                    LabeledContent("App Group") {
+                        if FileMannShareGroup.sharedContainer() != nil {
+                            Label("共享容器可用", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("签名未授权", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    Text("在 iOS 相册选择照片或视频 → 分享 → 传送到 FileMann。若首次未显示，可在分享列表的“更多”中开启。导入任务时不会永久保留另一份原文件。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("相册原生分享")
+                }
+
                 storageSection
             }
             .navigationTitle("设置")
