@@ -510,6 +510,20 @@ final class ArchiveViewModel: ObservableObject {
         if settings.transport == .webDAV {
             WebDAVBackgroundUploadManager.shared.cancel(taskID: task.id)
         }
+        // Removing a shared upload should also remove its disposable stage,
+        // otherwise the next app activation would re-enqueue the file.
+        if task.isShareStaging == true,
+           let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                "group.com.masakacj.filemann"
+           ),
+           let url = try? resolveBookmark(task.bookmark),
+           url.deletingLastPathComponent().standardizedFileURL ==
+            container.appendingPathComponent(
+                "Incoming-Share", isDirectory: true
+            ).standardizedFileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
         tasks.removeAll { $0.id == task.id }
         duplicateCandidates.removeAll { $0.taskID == task.id }
         invalidateVerification()
