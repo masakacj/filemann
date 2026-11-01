@@ -95,72 +95,110 @@ final class ShareViewController: UIViewController {
     }
 
     private func importAttachments() async throws -> Int {
-        // The extension and app derive the same container from the profile.
-        // This works with a self-signed profile that grants an App Group.
+        // FileMann and this extension use the same group resolved from their
+        // signed provisioning profiles.
         let inbox = try FileMannShareGroup.incomingDirectory()
-
         let providers = (extensionContext?.inputItems ?? [])
             .compactMap { $0 as? NSExtensionItem }
             .flatMap { $0.attachments ?? [] }
-        var saved = 0
 
-        for provider in providers {
-            // Prefer the concrete original UTI (HEIC/HEIF/JPEG/MOV/MP4),
-            // avoiding Photos' optional compatible-format conversion.
-            let supported = provider.registeredTypeIdentifiers.filter {
-                guard let kind = UTType($0) else { return false }
-                return kind.conforms(to: .movie) || kind.conforms(to: .image)
-            }
-            let identifier = supported.first {
-                $0 != UTType.image.identifier &&
-                    $0 != UTType.movie.identifier
-            } ?? supported.first
-            guard let identifier else { continue }
-            let originalName = provider.suggestedName ?? "shared-media"
-            let fileName: String
-            if (originalName as NSString).pathExtension.isEmpty {
-                let fileExtension = UTType(identifier)?
-                    .preferredFilenameExtension ?? "bin"
-                fileName = originalName + "." + fileExtension
-            } else {
-                fileName = originalName
-            }
-            let destination = inbox.appendingPathComponent(
-                UUID().uuidString.lowercased() + "__" +
-                    safeName(fileName)
-            )
+        var created: [URL] = []
+        do {
+            for provider in providers {
+                try Task.checkCancellation()
 
-            try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Void, Error>) in
-                provider.loadFileRepresentation(forTypeIdentifier: identifier) {
-                    url, error in
-                    guard let url else {
-                        continuation.resume(
-                            throwing: error ?? ShareError.providerFailed
-                        )
-                        return
-                    }
-                    do {
-                        // A hard link only adds a filesystem reference if the
-                        // provider and shared container reside on one volume.
-                        do {
-                            try FileManager.default.linkItem(
-                                at: url, to: destination
+                // Prefer HEIC/HEIF/MOV/MP4, not a converted generic image.
+                let supported = provider.registeredTypeIdentifiers.filter {
+                    guard let kind = UTType($0) else { return false }
+                    return kind.conforms(to: .movie) ||
+                        kind.conforms(to: .image)
+                }
+                let identifier = supported.first {
+                    $0 != UTType.image.identifier &&
+                        $0 != UTType.movie.identifier
+                } ?? supported.first
+                guard let identifier else { continue }
+
+                let name = provider.suggestedName ?? "shared-media"
+                let fileName: String
+                if (name as NSString).pathExtension.isEmpty {
+                    let ext = UTType(identifier)?
+                        .preferredFilenameExtension ?? "bin"
+                    fileName = name + "." + ext
+                } else {
+                    fileName = name
+                }
+                let destination = inbox.appendingPathComponent(
+                    UUID().uuidString.lowercased() + "__" +
+                        safeName(fileName)
+                )
+
+                // Ask the provider for in-place access first. This avoids a
+                // Photos export copy when supported. NSFileCoordinator is
+                // required even if the provider supplies a temporary file.
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<Void, Error>) in
+                    provider.loadInPlaceFileRepresentation(
+                        forTypeIdentifier: identifier
+                    ) { url, _, error in
+                        guard let url else {
+                            continuation.resume(
+                                throwing: error ?? ShareError.providerFailed
                             )
-                        } catch {
-                            try FileManager.default.copyItem(
-                                at: url, to: destination
-                            )
+                            return
                         }
-                        continuation.resume()
-                    } catch {
-                        continuation.resume(throwing: error)
+
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer {
+                            if scoped { url.stopAccessingSecurityScopedResource() }
+                        }
+                        var coordinationError: NSError?
+                        var transferError: Error?
+
+                        NSFileCoordinator(filePresenter: nil).coordinate(
+                            readingItemAt: url,
+                            options: [],
+                            error: &coordinationError
+                        ) { source in
+                            do {
+                                // Same-volume hard links share data blocks.
+                                // Copy only when the provider or sandbox
+                                // disallows a hard link.
+                                do {
+                                    try FileManager.default.linkItem(
+                                        at: source, to: destination
+                                    )
+                                } catch {
+                                    try FileManager.default.copyItem(
+                                        at: source, to: destination
+                                    )
+                                }
+                            } catch {
+                                transferError = error
+                            }
+                        }
+
+                        if let issue = transferError ?? coordinationError {
+                            try? FileManager.default.removeItem(
+                                at: destination
+                            )
+                            continuation.resume(throwing: issue)
+                        } else {
+                            continuation.resume()
+                        }
                     }
                 }
+                created.append(destination)
             }
-            saved += 1
+            return created.count
+        } catch {
+            // All-or-nothing staging: do not strand extra copies when one
+            // of the selected photos fails or the user cancels.
+            for file in created {
+                try? FileManager.default.removeItem(at: file)
+            }
+            throw error
         }
-        return saved
     }
 
     private func safeName(_ name: String) -> String {
