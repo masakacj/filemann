@@ -793,6 +793,7 @@ final class ArchiveViewModel: ObservableObject {
                     self.tasks[index].remoteVerifiedPath = remotePath
                     self.tasks[index].state = .completed
                     self.tasks[index].errorMessage = "NAS 已落盘并通过文件大小校验"
+                    self.cleanupShareStaging(at: index)
                     self.persistTasks()
                     if self.tasks.contains(where: {
                         $0.state == .queued
@@ -987,6 +988,7 @@ final class ArchiveViewModel: ObservableObject {
                     tasks[current].transferredBytes = result.remoteSize
                     tasks[current].remoteVerifiedPath = result.remotePath
                     tasks[current].state = .completed
+                    cleanupShareStaging(at: current)
                     persistTasks()
                 } catch is CancellationError {
                     if let current = tasks.firstIndex(where: { $0.id == id }) {
@@ -1192,6 +1194,39 @@ final class ArchiveViewModel: ObservableObject {
         )
         activeWebDAVEndpoint = service.endpointLabel
         return service
+    }
+
+    // Share-sheet staging is disposable, unlike the Photos original.
+    // Clean it immediately after the NAS file is verified, even when a
+    // different task in the batch later fails. Never delete arbitrary paths.
+    private func cleanupShareStaging(at index: Int) {
+        guard tasks.indices.contains(index),
+              tasks[index].isShareStaging == true,
+              tasks[index].state == .completed,
+              !tasks[index].sourceDeleted,
+              let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier:
+                    "group.com.masakacj.filemann"
+              ),
+              let url = try? resolveBookmark(tasks[index].bookmark)
+        else { return }
+
+        let inbox = container.appendingPathComponent(
+            "Incoming-Share", isDirectory: true
+        ).standardizedFileURL
+        guard url.deletingLastPathComponent().standardizedFileURL == inbox else {
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: url)
+            tasks[index].sourceDeleted = true
+            tasks[index].errorMessage =
+                "已验证归档；分享暂存文件已清理，相册原件不受影响"
+        } catch {
+            tasks[index].errorMessage =
+                "已验证归档；分享暂存清理失败：\(error.localizedDescription)"
+        }
     }
 
     private func isSourceAccessError(_ error: Error) -> Bool {
