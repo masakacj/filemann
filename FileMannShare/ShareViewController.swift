@@ -105,18 +105,16 @@ final class ShareViewController: UIViewController {
         var saved = 0
 
         for provider in providers {
-            let identifier: String?
-            if provider.hasItemConformingToTypeIdentifier(
-                UTType.movie.identifier
-            ) {
-                identifier = UTType.movie.identifier
-            } else if provider.hasItemConformingToTypeIdentifier(
-                UTType.image.identifier
-            ) {
-                identifier = UTType.image.identifier
-            } else {
-                identifier = nil
+            // Prefer the concrete original UTI (HEIC/HEIF/JPEG/MOV/MP4),
+            // avoiding Photos' optional compatible-format conversion.
+            let supported = provider.registeredTypeIdentifiers.filter {
+                guard let kind = UTType($0) else { return false }
+                return kind.conforms(to: .movie) || kind.conforms(to: .image)
             }
+            let identifier = supported.first {
+                $0 != UTType.image.identifier &&
+                    $0 != UTType.movie.identifier
+            } ?? supported.first
             guard let identifier else { continue }
             let originalName = provider.suggestedName ?? "shared-media"
             let fileName: String
