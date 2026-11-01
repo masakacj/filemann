@@ -26,6 +26,34 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    SecureField(
+                        "固定密码", text: $viewModel.configCenterPassword
+                    )
+                    .textContentType(.password)
+                    Button {
+                        viewModel.syncConfigCenter()
+                    } label: {
+                        HStack {
+                            Text("读取并应用配置")
+                            if viewModel.isConfigCenterSyncing {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(viewModel.isConfigCenterSyncing)
+                    if let status = viewModel.configCenterStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("统一配置中心")
+                } footer: {
+                    Text("从 config.781751.xyz 读取 filemann 专属 NAS 配置，固定密码仅存本机 Keychain。离线时保留上次成功配置。")
+                }
+
                 Section("传输方式") {
                     Picker(
                         "协议",
