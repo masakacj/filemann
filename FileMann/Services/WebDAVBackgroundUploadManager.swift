@@ -275,13 +275,16 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
 
         if let response = task.response as? HTTPURLResponse,
            response.statusCode == 403 {
-            let path = descriptor.finalPath.hasPrefix("/")
-                ? descriptor.finalPath
-                : "/\(descriptor.finalPath)"
+            let path = descriptor.partialPath.hasPrefix("/")
+                ? descriptor.partialPath
+                : "/\(descriptor.partialPath)"
+            let endpoint = TaskStore.loadSettings().webDAVTitle(
+                for: descriptor.baseURLString
+            )
             postFailure(
                 taskID: descriptor.taskID,
                 message:
-                    "NAS 拒绝上传（HTTP 403）：\(path)。请确认已选择 QNAP 共享文件夹，并且当前账号具有写权限。"
+                    "WebDAV（\(endpoint)）拒绝上传临时文件（PUT，HTTP 403）：\(path)。请检查归档路径、写入权限和远程代理规则。"
             )
             return
         }

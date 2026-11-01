@@ -303,7 +303,7 @@ struct SettingsView: View {
 
     private var connectionTestSection: some View {
         Section {
-            Button("测试连接") {
+            Button("测试连接与写入权限") {
                 viewModel.saveSettings()
                 viewModel.testConnection()
             }
@@ -319,7 +319,7 @@ struct SettingsView: View {
         } footer: {
             if viewModel.settings.transport == .webDAV {
                 Text(
-                    "本地和远程端口都支持自定义。远程连接建议使用证书有效的 HTTPS。"
+                    "会在所选归档目录写入、重命名、删除一个临时文件，以验证 PUT / MOVE / DELETE 权限。WebDAV 服务路径与归档子目录不要重复填写共享文件夹名；远程连接建议使用可信 HTTPS。"
                 )
             }
         }

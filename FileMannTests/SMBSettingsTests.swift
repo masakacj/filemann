@@ -72,6 +72,38 @@ final class SMBSettingsTests: XCTestCase {
         )
     }
 
+    func testWriteCheckSucceedsForWritableDirectory() async throws {
+        let service = try mockWebDAVService(directory: "Album")
+        try await service.testConnection()
+    }
+
+    func testWriteCheckReportsForbiddenPUT() async throws {
+        let service = try mockWebDAVService(directory: "ReadOnly")
+
+        do {
+            try await service.testConnection()
+            XCTFail("A read-only directory must fail the write check")
+        } catch WebDAVArchiveError.forbidden(let operation, let path) {
+            XCTAssertTrue(operation.contains("PUT"))
+            XCTAssertTrue(path.hasPrefix("ReadOnly/"))
+        }
+    }
+
+    private func mockWebDAVService(
+        directory: String
+    ) throws -> WebDAVArchiveService {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVUsername = "filemann"
+        settings.webDAVRemoteDirectory = directory
+        return try WebDAVArchiveService(
+            settings: settings,
+            password: "filemann-pass"
+        )
+    }
+
     func testConnectionTitlesFollowResolvedURL() {
         var settings = SMBSettings()
         settings.webDAVLocalTitle = "Home"

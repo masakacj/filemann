@@ -184,6 +184,7 @@ class Handler(BaseHTTPRequestHandler):
             add_response("/", collection=True)
             if depth != "0":
                 add_response("/Album/", collection=True)
+                add_response("/ReadOnly/", collection=True)
                 add_response(
                     "/photo.jpg",
                     size=len(PHOTO),
@@ -194,6 +195,8 @@ class Handler(BaseHTTPRequestHandler):
                     size=len(CLIP),
                     content_type="video/mp4"
                 )
+        elif path == "/ReadOnly":
+            add_response("/ReadOnly/", collection=True)
         elif path == "/Album":
             add_response("/Album/", collection=True)
             if depth != "0":
@@ -233,6 +236,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         self.state.log(self)
         if not self._require_auth():
+            return
+        if self._path().startswith("/ReadOnly/"):
+            self.send_error(403, "Read-only WebDAV directory")
             return
         length = int(self.headers.get("Content-Length", "0"))
         data = self.rfile.read(length)

@@ -25,7 +25,7 @@ enum WebDAVArchiveError: LocalizedError {
             let target = path.isEmpty || path.hasPrefix("/")
                 ? (path.isEmpty ? "/" : path)
                 : "/\(path)"
-            return "NAS 拒绝\(operation)（HTTP 403）：\(target)。请确认归档目录是 QNAP 共享文件夹，并且当前账号具有读写权限。"
+            return "WebDAV 拒绝\(operation)（HTTP 403）：\(target)。请核对共享文件夹路径与账号权限；通过远程代理访问时，还需确认代理允许该请求方法。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -255,10 +255,93 @@ final class WebDAVArchiveService {
 
     func testConnection() async throws {
         try await connectAndPrepare()
-        _ = try await propfind(
-            path: settings.normalizedWebDAVDirectory,
-            depth: "0"
-        )
+        let directory = settings.normalizedWebDAVDirectory
+        _ = try await propfind(path: directory, depth: "0")
+        guard !directory.isEmpty else { return }
+        try await verifyWriteOperations(in: directory)
+    }
+
+    // The connection test must check write/rename/delete permissions, not
+    // merely whether a read-only NAS share can answer PROPFIND.
+    // Only disposable, UUID-named test files are touched.
+    private func verifyWriteOperations(in directory: String) async throws {
+        let name = "filemann-webdav-check-" + UUID().uuidString.lowercased()
+        let temporaryPath = join(directory, name + ".tmp")
+        let renamedPath = join(directory, name + ".verified")
+
+        do {
+            try await performWriteCheck(
+                method: "PUT",
+                path: temporaryPath,
+                body: Data("FileMann WebDAV write check".utf8),
+                accepted: [200, 201, 204],
+                action: "写入测试文件"
+            )
+            try await performWriteCheck(
+                method: "MOVE",
+                path: temporaryPath,
+                destinationPath: renamedPath,
+                accepted: [201, 204],
+                action: "重命名测试文件"
+            )
+            try await performWriteCheck(
+                method: "DELETE",
+                path: renamedPath,
+                accepted: [200, 202, 204],
+                action: "删除测试文件"
+            )
+        } catch {
+            // Best-effort cleanup, without masking the original failure.
+            try? await performWriteCheck(
+                method: "DELETE",
+                path: temporaryPath,
+                accepted: [200, 202, 204, 404],
+                action: "清理测试文件"
+            )
+            try? await performWriteCheck(
+                method: "DELETE",
+                path: renamedPath,
+                accepted: [200, 202, 204, 404],
+                action: "清理测试文件"
+            )
+            throw error
+        }
+    }
+
+    private func performWriteCheck(
+        method: String,
+        path: String,
+        destinationPath: String? = nil,
+        body: Data? = nil,
+        accepted: Set<Int>,
+        action: String
+    ) async throws {
+        var request = URLRequest(url: remoteURL(for: path))
+        request.httpMethod = method
+        if let body {
+            request.httpBody = body
+            request.setValue(
+                "application/octet-stream",
+                forHTTPHeaderField: "Content-Type"
+            )
+        }
+        if let destinationPath {
+            request.setValue(
+                remoteURL(for: destinationPath).absoluteString,
+                forHTTPHeaderField: "Destination"
+            )
+            request.setValue("F", forHTTPHeaderField: "Overwrite")
+        }
+        applyAuthorization(to: &request)
+        let (_, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse,
+           http.statusCode == 403 {
+            throw WebDAVArchiveError.forbidden(
+                operation: action + "（" + method + "）",
+                path: path
+            )
+        }
+        try validate(response, accepted: accepted)
     }
 
     func listDirectories(at path: String) async throws -> [SMBDirectoryEntry] {
@@ -463,7 +546,7 @@ final class WebDAVArchiveService {
         if let http = response as? HTTPURLResponse,
            http.statusCode == 403 {
             throw WebDAVArchiveError.forbidden(
-                operation: "完成文件落盘",
+                operation: "重命名上传临时文件（MOVE）",
                 path: finalPath
             )
         }
@@ -743,7 +826,7 @@ final class WebDAVArchiveService {
                 ? component
                 : "\(current)/\(component)"
 
-            if await remoteExists(atPath: current) {
+            if try await remoteExists(atPath: current) {
                 continue
             }
 
@@ -772,12 +855,19 @@ final class WebDAVArchiveService {
         }
     }
 
-    private func remoteExists(atPath path: String) async -> Bool {
+    private func remoteExists(atPath path: String) async throws -> Bool {
         do {
             _ = try await propfind(path: path, depth: "0")
             return true
-        } catch {
+        } catch WebDAVArchiveError.unexpectedStatus(let status)
+            where status == 404 {
             return false
+        } catch WebDAVArchiveError.unexpectedStatus(let status)
+            where status == 403 {
+            throw WebDAVArchiveError.forbidden(
+                operation: "读取归档目录（PROPFIND）",
+                path: path
+            )
         }
     }
 
