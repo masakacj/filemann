@@ -75,6 +75,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: FileMannShare
+      - path: Shared/FileMannShareGroup.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.share
@@ -95,8 +96,9 @@ targets:
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
           NSExtensionAttributes:
             NSExtensionActivationRule:
-              NSExtensionActivationSupportsImageWithMaxCount: 50
-              NSExtensionActivationSupportsMovieWithMaxCount: 50
+              NSExtensionActivationSupportsFileWithMaxCount: 25
+              NSExtensionActivationSupportsImageWithMaxCount: 25
+              NSExtensionActivationSupportsMovieWithMaxCount: 25
 
   FileMannTests:
     type: bundle.unit-test
