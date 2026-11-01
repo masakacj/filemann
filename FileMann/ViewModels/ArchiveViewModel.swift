@@ -86,14 +86,9 @@ final class ArchiveViewModel: ObservableObject {
     /// Imports shared-file references into the persistent queue without
     /// copying their bytes into FileMann's private media library.
     func importShareInbox() {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier:
-                "group.com.masakacj.filemann"
+        guard let inbox = try? FileMannShareGroup.incomingDirectory(
+            createIfMissing: false
         ) else { return }
-
-        let inbox = container.appendingPathComponent(
-            "Incoming-Share", isDirectory: true
-        )
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: inbox,
             includingPropertiesForKeys: [
@@ -527,15 +522,12 @@ final class ArchiveViewModel: ObservableObject {
         // Removing a shared upload should also remove its disposable stage,
         // otherwise the next app activation would re-enqueue the file.
         if task.isShareStaging == true,
-           let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier:
-                "group.com.masakacj.filemann"
+           let inbox = try? FileMannShareGroup.incomingDirectory(
+                createIfMissing: false
            ),
            let url = try? resolveBookmark(task.bookmark),
            url.deletingLastPathComponent().standardizedFileURL ==
-            container.appendingPathComponent(
-                "Incoming-Share", isDirectory: true
-            ).standardizedFileURL {
+                inbox.standardizedFileURL {
             try? FileManager.default.removeItem(at: url)
         }
         tasks.removeAll { $0.id == task.id }
@@ -1232,17 +1224,13 @@ final class ArchiveViewModel: ObservableObject {
               tasks[index].isShareStaging == true,
               tasks[index].state == .completed,
               !tasks[index].sourceDeleted,
-              let container = FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier:
-                    "group.com.masakacj.filemann"
+              let inbox = try? FileMannShareGroup.incomingDirectory(
+                createIfMissing: false
               ),
               let url = try? resolveBookmark(tasks[index].bookmark)
         else { return }
-
-        let inbox = container.appendingPathComponent(
-            "Incoming-Share", isDirectory: true
-        ).standardizedFileURL
-        guard url.deletingLastPathComponent().standardizedFileURL == inbox else {
+        guard url.deletingLastPathComponent().standardizedFileURL ==
+                inbox.standardizedFileURL else {
             return
         }
 
