@@ -30,6 +30,8 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
     var remoteRelativePath: String?
     var sourceLocationID: UUID?
     var sourceRelativePath: String?
+    /// Disposable App Group share staging; never a Photos library original.
+    var isShareStaging: Bool?
     var remoteVerifiedPath: String?
     var shouldDeleteSource: Bool?
     var fileSize: Int64
@@ -62,6 +64,7 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
         self.remoteRelativePath = remoteRelativePath
         self.sourceLocationID = sourceLocationID
         self.sourceRelativePath = sourceRelativePath
+        self.isShareStaging = nil
         self.remoteVerifiedPath = nil
         self.shouldDeleteSource = nil
         self.fileSize = fileSize

@@ -7,16 +7,42 @@ enum TaskStore {
     private static let duplicatesKey = "filemann.duplicate.candidates.v1"
     private static let verificationKey = "filemann.last.verification.v1"
 
+    // Durable, atomically-written queue; UserDefaults retained as a backup
+    // and migration path from previous versions.
+    private static func queueFileURL() throws -> URL {
+        let support = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let folder = support.appendingPathComponent(
+            "FileMann/TransferQueue", isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true
+        )
+        return folder.appendingPathComponent("tasks.json")
+    }
+
     static func loadTasks() -> [ArchiveTask] {
+        if let url = try? queueFileURL(),
+           let data = try? Data(contentsOf: url),
+           let tasks = try? JSONDecoder().decode([ArchiveTask].self, from: data) {
+            return tasks
+        }
         guard let data = UserDefaults.standard.data(forKey: tasksKey),
-              let value = try? JSONDecoder().decode([ArchiveTask].self, from: data) else {
+              let tasks = try? JSONDecoder().decode([ArchiveTask].self, from: data) else {
             return []
         }
-        return value
+        return tasks
     }
 
     static func saveTasks(_ tasks: [ArchiveTask]) {
         guard let data = try? JSONEncoder().encode(tasks) else { return }
+        if let url = try? queueFileURL() {
+            try? data.write(to: url, options: .atomic)
+        }
         UserDefaults.standard.set(data, forKey: tasksKey)
     }
 

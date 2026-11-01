@@ -49,7 +49,8 @@ struct SMBSettings: Codable, Equatable {
     var username: String = ""
     var chunkSizeMB: Int = 16
 
-    var deleteAfterArchive: Bool = true
+    // Never delete original photos or mapped files by default.
+    var deleteAfterArchive: Bool = false
 
     var normalizedHost: String {
         host

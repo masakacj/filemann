@@ -26,6 +26,34 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    SecureField(
+                        "固定密码", text: $viewModel.configCenterPassword
+                    )
+                    .textContentType(.password)
+                    Button {
+                        viewModel.syncConfigCenter()
+                    } label: {
+                        HStack {
+                            Text("读取并应用配置")
+                            if viewModel.isConfigCenterSyncing {
+                                Spacer()
+                                ProgressView()
+                            }
+                        }
+                    }
+                    .disabled(viewModel.isConfigCenterSyncing)
+                    if let status = viewModel.configCenterStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("统一配置中心")
+                } footer: {
+                    Text("从 config.781751.xyz 读取 filemann 专属 NAS 配置，固定密码仅存本机 Keychain。离线时保留上次成功配置。")
+                }
+
                 Section("传输方式") {
                     Picker(
                         "协议",
@@ -48,6 +76,24 @@ struct SettingsView: View {
                 }
 
                 connectionTestSection
+
+                Section {
+                    LabeledContent("App Group") {
+                        if FileMannShareGroup.sharedContainer() != nil {
+                            Label("共享容器可用", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("签名未授权", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    Text("在 iOS 相册选择照片或视频 → 分享 → 传送到 FileMann。若首次未显示，可在分享列表的“更多”中开启。导入任务时不会永久保留另一份原文件。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("相册原生分享")
+                }
+
                 storageSection
             }
             .navigationTitle("设置")
@@ -347,6 +393,18 @@ struct SettingsView: View {
                     )
                 )
                 .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("相册分享临时暂存") {
+                Text(
+                    byteCountString(
+                        storageSnapshot.shareStagingBytes
+                    )
+                )
+                .foregroundStyle(
+                    storageSnapshot.shareStagingBytes > 0
+                        ? .orange : .secondary
+                )
             }
 
             LabeledContent("NAS 缓存") {

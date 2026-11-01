@@ -104,6 +104,38 @@ final class SMBSettingsTests: XCTestCase {
         )
     }
 
+    func testRemoteConfigurationPreservesMissingValues() throws {
+        let config = try JSONDecoder().decode(
+            FileMannRemoteConfig.self,
+            from: Data("""
+            {"webdav":{"localURL":"http://192.168.233.201:8900"},
+             "transfer":{"transport":"webDAV","deleteAfterArchive":false}}
+            """.utf8)
+        )
+        var existing = SMBSettings()
+        existing.webDAVUsername = "preserve-user"
+        existing.webDAVRemoteDirectory = "Shared/MyFiles"
+        let result = try config.applying(to: existing)
+        XCTAssertEqual(
+            result.normalizedWebDAVBaseURL,
+            "http://192.168.233.201:8900"
+        )
+        XCTAssertEqual(result.webDAVUsername, "preserve-user")
+        XCTAssertEqual(result.normalizedWebDAVDirectory, "Shared/MyFiles")
+        XCTAssertFalse(result.deleteAfterArchive)
+    }
+
+    func testRejectInsecureRemoteConfigURL() throws {
+        let config = try JSONDecoder().decode(
+            FileMannRemoteConfig.self,
+            from: Data(
+                #"{"webdav":{"remoteURL":"http://nas.example.com/webdav"}}"#
+                .utf8
+            )
+        )
+        XCTAssertThrowsError(try config.applying(to: SMBSettings()))
+    }
+
     func testConnectionTitlesFollowResolvedURL() {
         var settings = SMBSettings()
         settings.webDAVLocalTitle = "Home"
