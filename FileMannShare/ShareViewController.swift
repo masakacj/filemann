@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 /// When the provider gives a same-volume temporary file, a hard link avoids
 /// copying its bytes; otherwise one temporary staging copy is unavoidable.
 final class ShareViewController: UIViewController {
-    private let groupID = "group.com.masakacj.filemann"
     private let info = UILabel()
     private let progress = UIActivityIndicatorView(style: .medium)
     private let action = UIButton(type: .system)
@@ -84,14 +83,11 @@ final class ShareViewController: UIViewController {
     }
 
     private enum ShareError: LocalizedError {
-        case noGroup
         case noMedia
         case providerFailed
 
         var errorDescription: String? {
             switch self {
-            case .noGroup:
-                return "签名缺少 group.com.masakacj.filemann App Group 权限"
             case .noMedia: return "没有可传输的图片或视频"
             case .providerFailed: return "无法读取分享的文件"
             }
@@ -99,17 +95,9 @@ final class ShareViewController: UIViewController {
     }
 
     private func importAttachments() async throws -> Int {
-        guard let group = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: groupID
-        ) else {
-            throw ShareError.noGroup
-        }
-        let inbox = group.appendingPathComponent(
-            "Incoming-Share", isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: inbox, withIntermediateDirectories: true
-        )
+        // The extension and app derive the same container from the profile.
+        // This works with a self-signed profile that grants an App Group.
+        let inbox = try FileMannShareGroup.incomingDirectory()
 
         let providers = (extensionContext?.inputItems ?? [])
             .compactMap { $0 as? NSExtensionItem }
