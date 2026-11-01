@@ -7,6 +7,7 @@ enum WebDAVArchiveError: LocalizedError {
     case unexpectedStatus(Int)
     case forbidden(operation: String, path: String)
     case duplicateArchiveDirectory(base: String, directory: String)
+    case missingArchiveDestination
     case remoteConflict(String)
     case remoteVerificationFailed
     case sourceUnavailable
@@ -29,6 +30,8 @@ enum WebDAVArchiveError: LocalizedError {
             return "WebDAV 拒绝\(operation)（HTTP 403）：\(target)。请核对共享文件夹路径与账号权限；通过远程代理访问时，还需确认代理允许该请求方法。"
         case .duplicateArchiveDirectory(let base, let directory):
             return "WebDAV 路径重复：服务地址已包含 \(base)，归档子目录又包含 \(directory)。请将共享名或目录前缀只填写一次，以免 PUT/MKCOL 被拒绝。"
+        case .missingArchiveDestination:
+            return "WebDAV 当前仅指向 NAS 根目录 /，不能直接上传。请先在共享目录中选择可写文件夹，或将服务 URL 配置为包含共享名的路径（例如 /Public）。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -278,10 +281,18 @@ final class WebDAVArchiveService {
     }
 
     func testConnection() async throws {
-        try await connectAndPrepare()
         let directory = settings.normalizedWebDAVDirectory
+        let shareRoot = baseURL.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !directory.isEmpty || !shareRoot.isEmpty else {
+            throw WebDAVArchiveError.missingArchiveDestination
+        }
+
+        try await connectAndPrepare()
         _ = try await propfind(path: directory, depth: "0")
-        guard !directory.isEmpty else { return }
+        // A share-root URL (such as /Public) is already the destination.
+        // An empty relative directory here is valid and must still undergo
+        // PUT/MOVE/DELETE testing rather than being treated as read-only.
         try await verifyWriteOperations(in: directory)
     }
 
