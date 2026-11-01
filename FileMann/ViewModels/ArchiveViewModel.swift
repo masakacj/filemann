@@ -21,6 +21,9 @@ final class ArchiveViewModel: ObservableObject {
     @Published var connectionTestMessage: String?
     @Published var bytesPerSecond: Double = 0
     @Published var activeWebDAVEndpoint: String?
+    @Published var configCenterPassword = KeychainStore.loadConfigCenterPassword()
+    @Published var configCenterStatus: String?
+    @Published var isConfigCenterSyncing = false
 
     private var worker: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -78,6 +81,84 @@ final class ArchiveViewModel: ObservableObject {
 
     var unresolvedDuplicateCount: Int {
         duplicateCandidates.filter { $0.decision == .unresolved }.count
+    }
+
+    /// Imports shared-file references into the persistent queue without
+    /// copying their bytes into FileMann's private media library.
+    func importShareInbox() {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                "group.com.masakacj.filemann"
+        ) else { return }
+
+        let inbox = container.appendingPathComponent(
+            "Incoming-Share", isDirectory: true
+        )
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: inbox,
+            includingPropertiesForKeys: [
+                .isRegularFileKey, .fileSizeKey, .contentModificationDateKey
+            ],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        var added = 0
+        for url in urls {
+            do {
+                guard FileMannShared.isSupportedMediaFile(url) else {
+                    continue
+                }
+                let values = try url.resourceValues(
+                    forKeys: [
+                        .isRegularFileKey, .fileSizeKey,
+                        .contentModificationDateKey
+                    ]
+                )
+                guard values.isRegularFile == true,
+                      let bytes = values.fileSize, bytes > 0 else {
+                    continue
+                }
+
+                // The share extension reuses the same staged file across
+                // launches until a verified upload deletes it.
+                let fileKey = url.lastPathComponent
+                if tasks.contains(where: {
+                    $0.isShareStaging == true &&
+                    $0.sourceRelativePath == fileKey
+                }) {
+                    continue
+                }
+
+                let parts = fileKey.components(separatedBy: "__")
+                let displayName = parts.count > 1
+                    ? parts.dropFirst().joined(separator: "__")
+                    : fileKey
+                let bookmark = try url.bookmarkData(
+                    options: .minimalBookmark,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                var task = ArchiveTask(
+                    bookmark: bookmark,
+                    displayName: displayName,
+                    remoteFileName: uniqueRemoteName(for: displayName),
+                    sourceRelativePath: fileKey,
+                    fileSize: Int64(bytes),
+                    sourceModifiedAt: values.contentModificationDate
+                )
+                task.isShareStaging = true
+                tasks.append(task)
+                added += 1
+            } catch {
+                // Keep unreadable files in staging for later retry.
+                continue
+            }
+        }
+
+        guard added > 0 else { return }
+        invalidateVerification()
+        persistTasks()
+        statusMessage = "已从相册分享导入 \(added) 项到持久化队列"
     }
 
     func addDocuments(_ urls: [URL]) {
@@ -236,6 +317,63 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
+    // Download only this app's private configuration. Running uploads
+    // retain their original endpoint and will not be reconfigured mid-flight.
+    func syncConfigCenter(silent: Bool = false) {
+        guard !isConfigCenterSyncing else { return }
+        let fixedPassword = configCenterPassword
+        guard !fixedPassword.isEmpty else {
+            if !silent { configCenterStatus = "请输入配置中心固定密码" }
+            return
+        }
+
+        isConfigCenterSyncing = true
+        if !silent { configCenterStatus = "正在读取 FileMann 配置…" }
+
+        Task {
+            defer { isConfigCenterSyncing = false }
+            do {
+                let remote = try await ConfigCenterClient.fetch(
+                    password: fixedPassword
+                )
+                guard !tasks.contains(where: { $0.state == .uploading }) else {
+                    configCenterStatus = "有任务正在传输；完成后才能应用配置"
+                    return
+                }
+                let updated = try remote.applying(to: settings)
+                try KeychainStore.saveConfigCenterPassword(fixedPassword)
+                try KeychainStore.saveWebDAVPassword(
+                    remote.webdav?.password ?? webDAVPassword
+                )
+                try KeychainStore.savePassword(
+                    remote.smb?.password ?? password
+                )
+                webDAVPassword = remote.webdav?.password ?? webDAVPassword
+                password = remote.smb?.password ?? password
+                settings = updated
+                TaskStore.saveSettings(updated)
+                var missing: [String] = []
+                if updated.normalizedWebDAVRemoteBaseURL.isEmpty {
+                    missing.append("外网 WebDAV 地址")
+                }
+                if !updated.hasWebDAVArchiveDirectory {
+                    missing.append("归档目录")
+                }
+                if updated.webDAVUsername.isEmpty ||
+                    webDAVPassword.isEmpty {
+                    missing.append("NAS 账号凭据")
+                }
+                configCenterStatus = missing.isEmpty
+                    ? "配置同步完成，内外网已就绪；离线沿用上次配置"
+                    : "已同步已有配置；服务端待补齐：" +
+                        missing.joined(separator: "、")
+            } catch {
+                configCenterStatus =
+                    "同步失败：\(error.localizedDescription)。原配置保持不变"
+            }
+        }
+    }
+
     func chooseRemoteDirectory(_ path: String) {
         switch settings.transport {
         case .webDAV:
@@ -386,6 +524,20 @@ final class ArchiveViewModel: ObservableObject {
         if settings.transport == .webDAV {
             WebDAVBackgroundUploadManager.shared.cancel(taskID: task.id)
         }
+        // Removing a shared upload should also remove its disposable stage,
+        // otherwise the next app activation would re-enqueue the file.
+        if task.isShareStaging == true,
+           let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                "group.com.masakacj.filemann"
+           ),
+           let url = try? resolveBookmark(task.bookmark),
+           url.deletingLastPathComponent().standardizedFileURL ==
+            container.appendingPathComponent(
+                "Incoming-Share", isDirectory: true
+            ).standardizedFileURL {
+            try? FileManager.default.removeItem(at: url)
+        }
         tasks.removeAll { $0.id == task.id }
         duplicateCandidates.removeAll { $0.taskID == task.id }
         invalidateVerification()
@@ -405,7 +557,7 @@ final class ArchiveViewModel: ObservableObject {
         tasks.first { $0.id == candidate.taskID }
     }
 
-    private func startWebDAV() {
+    private func startWebDAV(retryFailed: Bool = true) {
         guard settings.isValid else {
             statusMessage = "请先配置 QNAP WebDAV 地址"
             isShowingSettings = true
@@ -428,9 +580,9 @@ final class ArchiveViewModel: ObservableObject {
         saveSettings()
 
         for index in tasks.indices {
-            if tasks[index].state == .failed ||
-                tasks[index].state == .paused ||
-                tasks[index].state == .missingSource {
+            if (retryFailed && tasks[index].state == .failed) ||
+                (retryFailed && tasks[index].state == .paused) ||
+                (retryFailed && tasks[index].state == .missingSource) {
                 tasks[index].state = .queued
                 tasks[index].errorMessage = nil
             }
@@ -461,10 +613,15 @@ final class ArchiveViewModel: ObservableObject {
                 let existingTaskIDs = await manager.activeTaskIDs()
                 manager.resumeAll()
 
+                // A background URLSession copies the entire upload file
+                // into iOS temporary storage. Limit simultaneous staging
+                // to one file to avoid filling the phone with duplicate
+                // multi-GB videos.
                 var scheduled = 0
+                let capacity = max(0, 1 - existingTaskIDs.count)
                 for index in tasks.indices {
-                    guard tasks[index].state != .completed,
-                          tasks[index].state != .skipped else {
+                    guard scheduled < capacity else { break }
+                    guard tasks[index].state == .queued else {
                         continue
                     }
 
@@ -664,8 +821,18 @@ final class ArchiveViewModel: ObservableObject {
                     self.tasks[index].remoteVerifiedPath = remotePath
                     self.tasks[index].state = .completed
                     self.tasks[index].errorMessage = "NAS 已落盘并通过文件大小校验"
+                    self.cleanupShareStaging(at: index)
                     self.persistTasks()
-                    await self.finishWebDAVBatchIfPossible()
+                    if self.tasks.contains(where: {
+                        $0.state == .queued
+                    }), !self.tasks.contains(where: {
+                        $0.state == .uploading
+                    }) {
+                        self.isRunning = false
+                        self.startWebDAV(retryFailed: false)
+                    } else {
+                        await self.finishWebDAVBatchIfPossible()
+                    }
                 }
             }
         )
@@ -750,13 +917,18 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive {
+            if settings.deleteAfterArchive ||
+                tasks.contains(where: {
+                    $0.isShareStaging == true && !$0.sourceDeleted
+                }) {
                 var deletionFailures = 0
 
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          tasks[index].shouldDeleteSource != false else {
+                          (tasks[index].isShareStaging == true ||
+                            (settings.deleteAfterArchive &&
+                             tasks[index].shouldDeleteSource != false)) else {
                         continue
                     }
 
@@ -844,6 +1016,7 @@ final class ArchiveViewModel: ObservableObject {
                     tasks[current].transferredBytes = result.remoteSize
                     tasks[current].remoteVerifiedPath = result.remotePath
                     tasks[current].state = .completed
+                    cleanupShareStaging(at: current)
                     persistTasks()
                 } catch is CancellationError {
                     if let current = tasks.firstIndex(where: { $0.id == id }) {
@@ -868,12 +1041,17 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive {
+            if settings.deleteAfterArchive ||
+                tasks.contains(where: {
+                    $0.isShareStaging == true && !$0.sourceDeleted
+                }) {
                 var deletionFailures = 0
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          tasks[index].shouldDeleteSource != false else {
+                          (tasks[index].isShareStaging == true ||
+                            (settings.deleteAfterArchive &&
+                             tasks[index].shouldDeleteSource != false)) else {
                         continue
                     }
 
@@ -1044,6 +1222,39 @@ final class ArchiveViewModel: ObservableObject {
         )
         activeWebDAVEndpoint = service.endpointLabel
         return service
+    }
+
+    // Share-sheet staging is disposable, unlike the Photos original.
+    // Clean it immediately after the NAS file is verified, even when a
+    // different task in the batch later fails. Never delete arbitrary paths.
+    private func cleanupShareStaging(at index: Int) {
+        guard tasks.indices.contains(index),
+              tasks[index].isShareStaging == true,
+              tasks[index].state == .completed,
+              !tasks[index].sourceDeleted,
+              let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier:
+                    "group.com.masakacj.filemann"
+              ),
+              let url = try? resolveBookmark(tasks[index].bookmark)
+        else { return }
+
+        let inbox = container.appendingPathComponent(
+            "Incoming-Share", isDirectory: true
+        ).standardizedFileURL
+        guard url.deletingLastPathComponent().standardizedFileURL == inbox else {
+            return
+        }
+
+        do {
+            try FileManager.default.removeItem(at: url)
+            tasks[index].sourceDeleted = true
+            tasks[index].errorMessage =
+                "已验证归档；分享暂存文件已清理，相册原件不受影响"
+        } catch {
+            tasks[index].errorMessage =
+                "已验证归档；分享暂存清理失败：\(error.localizedDescription)"
+        }
     }
 
     private func isSourceAccessError(_ error: Error) -> Bool {

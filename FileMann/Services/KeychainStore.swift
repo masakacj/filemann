@@ -5,6 +5,7 @@ enum KeychainStore {
     private static let service = "com.masakacj.filemann"
     private static let smbPasswordAccount = "smb-password"
     private static let webDAVPasswordAccount = "webdav-password"
+    private static let configPasswordAccount = "config-center-password"
 
     static func savePassword(_ password: String) throws {
         try save(password, account: smbPasswordAccount)
@@ -20,6 +21,14 @@ enum KeychainStore {
 
     static func loadWebDAVPassword() -> String {
         load(account: webDAVPasswordAccount)
+    }
+
+    static func saveConfigCenterPassword(_ password: String) throws {
+        try save(password, account: configPasswordAccount)
+    }
+
+    static func loadConfigCenterPassword() -> String {
+        load(account: configPasswordAccount)
     }
 
     private static func save(_ password: String, account: String) throws {

@@ -3,6 +3,8 @@ import Foundation
 struct FileMannStorageSnapshot: Sendable, Equatable {
     var localMediaBytes: Int64 = 0
     var shortcutInboxBytes: Int64 = 0
+    // App Group share-sheet staging, outside the app's own sandbox.
+    var shareStagingBytes: Int64 = 0
     var cacheBytes: Int64 = 0
     var metadataBytes: Int64 = 0
     var temporaryBytes: Int64 = 0
@@ -86,10 +88,16 @@ actor FileMannStorageManager {
                 "Media",
                 isDirectory: true
             )
+        let sharedIncoming = legacyGroup?
+            .appendingPathComponent(
+                "Incoming-Share",
+                isDirectory: true
+            )
 
         return FileMannStorageSnapshot(
             localMediaBytes: localMedia,
             shortcutInboxBytes: inbox,
+            shareStagingBytes: directorySize(sharedIncoming),
             cacheBytes: cache,
             metadataBytes: edits + imports,
             temporaryBytes: temporary,
