@@ -83,6 +83,84 @@ final class ArchiveViewModel: ObservableObject {
         duplicateCandidates.filter { $0.decision == .unresolved }.count
     }
 
+    /// Imports shared-file references into the persistent queue without
+    /// copying their bytes into FileMann's private media library.
+    func importShareInbox() {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier:
+                "group.com.masakacj.filemann"
+        ) else { return }
+
+        let inbox = container.appendingPathComponent(
+            "Incoming-Share", isDirectory: true
+        )
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: inbox,
+            includingPropertiesForKeys: [
+                .isRegularFileKey, .fileSizeKey, .contentModificationDateKey
+            ],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        var added = 0
+        for url in urls {
+            do {
+                guard FileMannShared.isSupportedMediaFile(url) else {
+                    continue
+                }
+                let values = try url.resourceValues(
+                    forKeys: [
+                        .isRegularFileKey, .fileSizeKey,
+                        .contentModificationDateKey
+                    ]
+                )
+                guard values.isRegularFile == true,
+                      let bytes = values.fileSize, bytes > 0 else {
+                    continue
+                }
+
+                // The share extension reuses the same staged file across
+                // launches until a verified upload deletes it.
+                let fileKey = url.lastPathComponent
+                if tasks.contains(where: {
+                    $0.isShareStaging == true &&
+                    $0.sourceRelativePath == fileKey
+                }) {
+                    continue
+                }
+
+                let parts = fileKey.components(separatedBy: "__")
+                let displayName = parts.count > 1
+                    ? parts.dropFirst().joined(separator: "__")
+                    : fileKey
+                let bookmark = try url.bookmarkData(
+                    options: .minimalBookmark,
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil
+                )
+                var task = ArchiveTask(
+                    bookmark: bookmark,
+                    displayName: displayName,
+                    remoteFileName: uniqueRemoteName(for: displayName),
+                    sourceRelativePath: fileKey,
+                    fileSize: Int64(bytes),
+                    sourceModifiedAt: values.contentModificationDate
+                )
+                task.isShareStaging = true
+                tasks.append(task)
+                added += 1
+            } catch {
+                // Keep unreadable files in staging for later retry.
+                continue
+            }
+        }
+
+        guard added > 0 else { return }
+        invalidateVerification()
+        persistTasks()
+        statusMessage = "已从相册分享导入 \(added) 项到持久化队列"
+    }
+
     func addDocuments(_ urls: [URL]) {
         var added = 0
         var failures: [String] = []
@@ -451,7 +529,7 @@ final class ArchiveViewModel: ObservableObject {
         tasks.first { $0.id == candidate.taskID }
     }
 
-    private func startWebDAV() {
+    private func startWebDAV(retryFailed: Bool = true) {
         guard settings.isValid else {
             statusMessage = "请先配置 QNAP WebDAV 地址"
             isShowingSettings = true
@@ -474,9 +552,9 @@ final class ArchiveViewModel: ObservableObject {
         saveSettings()
 
         for index in tasks.indices {
-            if tasks[index].state == .failed ||
-                tasks[index].state == .paused ||
-                tasks[index].state == .missingSource {
+            if (retryFailed && tasks[index].state == .failed) ||
+                (retryFailed && tasks[index].state == .paused) ||
+                (retryFailed && tasks[index].state == .missingSource) {
                 tasks[index].state = .queued
                 tasks[index].errorMessage = nil
             }
@@ -507,10 +585,15 @@ final class ArchiveViewModel: ObservableObject {
                 let existingTaskIDs = await manager.activeTaskIDs()
                 manager.resumeAll()
 
+                // A background URLSession copies the entire upload file
+                // into iOS temporary storage. Limit simultaneous staging
+                // to one file to avoid filling the phone with duplicate
+                // multi-GB videos.
                 var scheduled = 0
+                let capacity = max(0, 1 - existingTaskIDs.count)
                 for index in tasks.indices {
-                    guard tasks[index].state != .completed,
-                          tasks[index].state != .skipped else {
+                    guard scheduled < capacity else { break }
+                    guard tasks[index].state == .queued else {
                         continue
                     }
 
@@ -711,7 +794,16 @@ final class ArchiveViewModel: ObservableObject {
                     self.tasks[index].state = .completed
                     self.tasks[index].errorMessage = "NAS 已落盘并通过文件大小校验"
                     self.persistTasks()
-                    await self.finishWebDAVBatchIfPossible()
+                    if self.tasks.contains(where: {
+                        $0.state == .queued
+                    }), !self.tasks.contains(where: {
+                        $0.state == .uploading
+                    }) {
+                        self.isRunning = false
+                        self.startWebDAV(retryFailed: false)
+                    } else {
+                        await self.finishWebDAVBatchIfPossible()
+                    }
                 }
             }
         )
@@ -796,13 +888,18 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive {
+            if settings.deleteAfterArchive ||
+                tasks.contains(where: {
+                    $0.isShareStaging == true && !$0.sourceDeleted
+                }) {
                 var deletionFailures = 0
 
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          tasks[index].shouldDeleteSource != false else {
+                          (tasks[index].isShareStaging == true ||
+                            (settings.deleteAfterArchive &&
+                             tasks[index].shouldDeleteSource != false)) else {
                         continue
                     }
 
@@ -914,12 +1011,17 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive {
+            if settings.deleteAfterArchive ||
+                tasks.contains(where: {
+                    $0.isShareStaging == true && !$0.sourceDeleted
+                }) {
                 var deletionFailures = 0
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          tasks[index].shouldDeleteSource != false else {
+                          (tasks[index].isShareStaging == true ||
+                            (settings.deleteAfterArchive &&
+                             tasks[index].shouldDeleteSource != false)) else {
                         continue
                     }
 
