@@ -136,6 +136,15 @@ final class SMBSettingsTests: XCTestCase {
         try await service.testConnection()
     }
 
+    func testWritableLeafDoesNotRequireParentBrowsePermission() async throws {
+        // ParentDenied is intentionally 403, but the final Upload folder
+        // supports read, write, rename and delete, like a restricted NAS.
+        let service = try mockWebDAVService(
+            directory: "ParentDenied/Upload"
+        )
+        try await service.testConnection()
+    }
+
     func testWriteCheckReportsForbiddenPUT() async throws {
         let service = try mockWebDAVService(directory: "ReadOnly")
 
