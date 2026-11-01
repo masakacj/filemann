@@ -21,6 +21,9 @@ final class ArchiveViewModel: ObservableObject {
     @Published var connectionTestMessage: String?
     @Published var bytesPerSecond: Double = 0
     @Published var activeWebDAVEndpoint: String?
+    @Published var configCenterPassword = KeychainStore.loadConfigCenterPassword()
+    @Published var configCenterStatus: String?
+    @Published var isConfigCenterSyncing = false
 
     private var worker: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -233,6 +236,49 @@ final class ArchiveViewModel: ObservableObject {
             statusMessage = "归档设置已保存"
         } catch {
             statusMessage = "密码保存失败：\(error.localizedDescription)"
+        }
+    }
+
+    // Download only this app's private configuration. Running uploads
+    // retain their original endpoint and will not be reconfigured mid-flight.
+    func syncConfigCenter(silent: Bool = false) {
+        guard !isConfigCenterSyncing else { return }
+        let fixedPassword = configCenterPassword
+        guard !fixedPassword.isEmpty else {
+            if !silent { configCenterStatus = "请输入配置中心固定密码" }
+            return
+        }
+
+        isConfigCenterSyncing = true
+        if !silent { configCenterStatus = "正在读取 FileMann 配置…" }
+
+        Task {
+            defer { isConfigCenterSyncing = false }
+            do {
+                let remote = try await ConfigCenterClient.fetch(
+                    password: fixedPassword
+                )
+                guard !tasks.contains(where: { $0.state == .uploading }) else {
+                    configCenterStatus = "有任务正在传输；完成后才能应用配置"
+                    return
+                }
+                let updated = try remote.applying(to: settings)
+                try KeychainStore.saveConfigCenterPassword(fixedPassword)
+                try KeychainStore.saveWebDAVPassword(
+                    remote.webdav?.password ?? webDAVPassword
+                )
+                try KeychainStore.savePassword(
+                    remote.smb?.password ?? password
+                )
+                webDAVPassword = remote.webdav?.password ?? webDAVPassword
+                password = remote.smb?.password ?? password
+                settings = updated
+                TaskStore.saveSettings(updated)
+                configCenterStatus = "配置已从中心同步；离线沿用上次配置"
+            } catch {
+                configCenterStatus =
+                    "同步失败：\(error.localizedDescription)。原配置保持不变"
+            }
         }
     }
 
