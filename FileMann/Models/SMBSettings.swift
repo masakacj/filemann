@@ -121,7 +121,15 @@ struct SMBSettings: Codable, Equatable {
     }
 
     var hasWebDAVArchiveDirectory: Bool {
-        !normalizedWebDAVDirectory.isEmpty
+        if !normalizedWebDAVDirectory.isEmpty { return true }
+        // An URL rooted inside an actual WebDAV share can archive directly
+        // under that URL. Only a bare NAS site root "/" requires selecting a
+        // writable shared folder as the archive directory.
+        return webDAVCandidateBaseURLs.contains { candidate in
+            let components = URLComponents(string: candidate)
+            return !(components?.path ?? "")
+                .split(separator: "/").isEmpty
+        }
     }
 
     var normalizedWebDAVBaseURL: String {
