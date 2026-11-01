@@ -39,6 +39,7 @@ struct FileMannApp: App {
                 .task {
                     await FileMannCacheManager.shared
                         .prepareAtLaunch()
+                    viewModel.syncConfigCenter(silent: true)
                 }
         }
     }
