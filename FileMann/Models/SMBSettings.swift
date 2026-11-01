@@ -519,7 +519,7 @@ struct SMBSettings: Codable, Equatable {
         deleteAfterArchive = try c.decodeIfPresent(
             Bool.self,
             forKey: .deleteAfterArchive
-        ) ?? true
+        ) ?? false
 
         if webDAVLocalHost.isEmpty,
            let legacy = Self.parseLegacyURL(
