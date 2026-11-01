@@ -242,10 +242,10 @@ struct SettingsView: View {
             HStack {
                 Image(systemName: "folder")
                 Text(
-                    viewModel.settings
-                        .normalizedWebDAVDirectory
-                        .isEmpty
-                        ? "/"
+                    viewModel.settings.normalizedWebDAVDirectory.isEmpty
+                        ? (viewModel.settings.hasWebDAVArchiveDirectory
+                            ? "（WebDAV 共享根）"
+                            : "/（NAS 根目录，不可直接上传）")
                         : "/\(viewModel.settings.normalizedWebDAVDirectory)"
                 )
                 .font(.body.monospaced())
@@ -286,7 +286,7 @@ struct SettingsView: View {
             Text("归档")
         } footer: {
             Text(
-                "归档目录相对于当前 WebDAV 根路径。上传完成后会再次核对 NAS 文件数量和字节数，通过后才按设置删除本地副本。"
+                "如果 WebDAV URL 已是共享根（如 http://NAS:端口/Public），归档子目录可留空；如果 URL 只是 /，必须先选择可写共享目录。不要重复填写共享名。上传校验通过后才会按设置处理源文件。"
             )
         }
     }
