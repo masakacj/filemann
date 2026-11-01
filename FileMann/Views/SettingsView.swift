@@ -318,6 +318,49 @@ struct SettingsView: View {
                 "密码",
                 text: $viewModel.password
             )
+
+            LabeledContent("实际 SMB 路径") {
+                Text(viewModel.settings.smbConnectionSummary)
+                    .font(.caption.monospaced())
+                    .multilineTextAlignment(.trailing)
+            }
+
+            Button {
+                viewModel.saveSettings()
+                viewModel.discoverSMBShares()
+            } label: {
+                HStack {
+                    Text("从 NAS 读取 SMB 共享列表")
+                    if viewModel.isDiscoveringSMBShares {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(
+                viewModel.isDiscoveringSMBShares ||
+                viewModel.settings.normalizedHost.isEmpty
+            )
+
+            if let message = viewModel.smbShareProbeStatus {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(viewModel.availableSMBShares, id: \.self) { name in
+                Button {
+                    viewModel.chooseSMBShare(name)
+                } label: {
+                    HStack {
+                        Text(name)
+                        Spacer()
+                        if viewModel.settings.normalizedShare == name {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -365,7 +408,11 @@ struct SettingsView: View {
         } footer: {
             if viewModel.settings.transport == .webDAV {
                 Text(
-                    "会在所选归档目录写入、重命名、删除一个临时文件，以验证 PUT / MOVE / DELETE 权限。WebDAV 服务路径与归档子目录不要重复填写共享文件夹名；远程连接建议使用可信 HTTPS。"
+                    "目录可读取不代表可写。会在真实归档位置执行临时文件 PUT / MOVE / DELETE 测试。403 将指出失败操作及路径；请确保服务根目录和归档子目录没有重复共享名。"
+                )
+            } else {
+                Text(
+                    "SMB 会先验证共享连接、读取目录，再写入/移动/删除唯一临时文件。共享名应是 storage 等顶层 Share，Documentsf/Apps 是共享内目录；账号密码请与 nPlayer 使用的一致。"
                 )
             }
         }
