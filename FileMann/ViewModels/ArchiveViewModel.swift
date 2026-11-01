@@ -24,6 +24,9 @@ final class ArchiveViewModel: ObservableObject {
     @Published var configCenterPassword = KeychainStore.loadConfigCenterPassword()
     @Published var configCenterStatus: String?
     @Published var isConfigCenterSyncing = false
+    @Published var availableSMBShares: [String] = []
+    @Published var smbShareProbeStatus: String?
+    @Published var isDiscoveringSMBShares = false
 
     private var worker: Task<Void, Never>?
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -336,6 +339,30 @@ final class ArchiveViewModel: ObservableObject {
                     return
                 }
                 let updated = try remote.applying(to: settings)
+
+                // A stale config-center record must never silently replace
+                // a manually corrected LAN address on app launch.
+                // Explicit sync may intentionally migrate to a new NAS.
+                if silent {
+                    let currentHost = URL(
+                        string: settings.normalizedWebDAVBaseURL
+                    )?.host
+                    let incomingHost = URL(
+                        string: updated.normalizedWebDAVBaseURL
+                    )?.host
+                    let webDAVMismatch = currentHost != nil &&
+                        incomingHost != nil &&
+                        currentHost != incomingHost
+                    let smbMismatch = !settings.normalizedHost.isEmpty &&
+                        !updated.normalizedHost.isEmpty &&
+                        settings.normalizedHost != updated.normalizedHost
+                    if webDAVMismatch || smbMismatch {
+                        configCenterStatus =
+                            "配置中心的 NAS 地址与本机设置不一致，" +
+                            "已保留本机地址，防止启动后错误覆盖。请先修正配置中心。"
+                        return
+                    }
+                }
                 try KeychainStore.saveConfigCenterPassword(fixedPassword)
                 try KeychainStore.saveWebDAVPassword(
                     remote.webdav?.password ?? webDAVPassword
@@ -390,15 +417,48 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
+    func discoverSMBShares() {
+        guard !isDiscoveringSMBShares else { return }
+        availableSMBShares = []
+        isDiscoveringSMBShares = true
+        smbShareProbeStatus = "正在获取 NAS 共享列表…"
+        Task {
+            defer { isDiscoveringSMBShares = false }
+            do {
+                let service = try SMBArchiveService(
+                    settings: settings,
+                    password: password
+                )
+                let found = try await service.listAvailableShares()
+                availableSMBShares = found
+                smbShareProbeStatus = found.isEmpty
+                    ? "已连接 NAS，但没有枚举到可访问的 SMB 共享"
+                    : "已发现 \(found.count) 个共享；请选择与 nPlayer 相同的共享"
+            } catch {
+                smbShareProbeStatus =
+                    "SMB 共享发现失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func chooseSMBShare(_ name: String) {
+        settings.share = name
+        smbShareProbeStatus = "已选择共享 \(name)"
+        saveSettings()
+    }
+
     func testConnection() {
         connectionTestMessage = "连接中…"
         Task {
+            var target = ""
             do {
                 switch settings.transport {
                 case .webDAV:
                     let service = try await makeReachableWebDAVService()
+                    target = activeWebDAVEndpoint ?? service.endpointLabel
                     try await service.testConnection()
                 case .smb:
+                    target = settings.smbConnectionSummary
                     let service = try SMBArchiveService(
                         settings: settings,
                         password: password
@@ -417,7 +477,9 @@ final class ArchiveViewModel: ObservableObject {
                     connectionTestMessage = "连接成功"
                 }
             } catch {
-                connectionTestMessage = "连接失败：\(error.localizedDescription)"
+                connectionTestMessage =
+                    "连接/写入测试失败（\(target.isEmpty ? "NAS" : target)）：" +
+                    error.localizedDescription
             }
         }
     }
@@ -589,7 +651,10 @@ final class ArchiveViewModel: ObservableObject {
         Task {
             do {
                 let service = try await makeReachableWebDAVService()
-                try await service.connectAndPrepare()
+                // PROPFIND only confirms read access. Verify PUT/MOVE/
+                // DELETE on the actual upload directory before copying a
+                // large source into an iOS background upload staging area.
+                try await service.testConnection()
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
                 if foundNewDuplicates || unresolvedDuplicateCount > 0 {
@@ -674,7 +739,9 @@ final class ArchiveViewModel: ObservableObject {
                 statusMessage = "已暂停"
             } catch {
                 isRunning = false
-                statusMessage = "WebDAV 处理失败：\(error.localizedDescription)"
+                statusMessage =
+                    "WebDAV（\(activeWebDAVEndpoint ?? "NAS")）处理失败：" +
+                    error.localizedDescription
             }
         }
     }
@@ -1212,7 +1279,10 @@ final class ArchiveViewModel: ObservableObject {
             password: webDAVPassword,
             baseURLString: resolved
         )
-        activeWebDAVEndpoint = service.endpointLabel
+        let endpoint = URL(string: service.baseURLString)
+        let host = endpoint?.host ?? "NAS"
+        let port = endpoint?.port.map { ":\($0)" } ?? ""
+        activeWebDAVEndpoint = "\(service.endpointLabel) · \(host)\(port)"
         return service
     }
 
