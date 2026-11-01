@@ -201,12 +201,13 @@ jobs:
           GH_RUN_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          READY="$(curl -fsS https://ipa.78175132.xyz/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print("1" if (d.get("apps") or {}).get("filemann",{}).get("signing_ready") else "0")')"
+          SIGN_BASE="https://ipa.781751.xyz:58443"
+          READY="$(curl -fsS --connect-timeout 10 --max-time 20 "$SIGN_BASE/api/health" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("1" if (d.get("apps") or {}).get("filemann",{}).get("signing_ready") else "0")')"
           if [[ "$READY" != "1" ]]; then
-            echo "No provisioning profile currently authorizes com.masakacj.filemann; keeping unsigned build only."
-            exit 0
+            echo "FileMann signing is not ready; refusing to publish an unsigned-only release."
+            exit 1
           fi
-          curl --fail-with-body --retry 3 --retry-all-errors \
+          curl --fail-with-body --retry 2 --retry-all-errors --connect-timeout 15 --max-time 180 \
             -X POST \
             -H "Authorization: Bearer $GH_RUN_TOKEN" \
             -H "X-GitHub-Repository: $GITHUB_REPOSITORY" \
@@ -215,7 +216,7 @@ jobs:
             -H "X-App-Key: filemann" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @"$PWD/build/FileMann-unsigned.ipa" \
-            https://ipa.78175132.xyz/api/v1/sign \
+            "$SIGN_BASE/api/v1/sign" \
             | tee "$PWD/build/remote-sign-result.json"
 
       - name: Publish latest verified unsigned IPA
