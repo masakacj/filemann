@@ -22,6 +22,8 @@ targets:
       - package: AMSMB2
         product: AMSMB2
         embed: true
+      - target: FileMannShare
+        embed: true
     preBuildScripts:
       - name: Generate RGB App Icon
         script: |
@@ -31,7 +33,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann
-        MARKETING_VERSION: 1.2.3
+        CODE_SIGN_ENTITLEMENTS: FileMann/FileMann.entitlements
+        MARKETING_VERSION: 1.3.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 5.0
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -46,6 +49,7 @@ targets:
         UILaunchScreen: {}
         UIUserInterfaceStyle: Dark
         NSLocalNetworkUsageDescription: "FileMann 需要访问局域网中的 QNAP WebDAV / SMB NAS 以归档文件。"
+        NSPhotoLibraryUsageDescription: "FileMann 可读取你选择的相册文件并归档到 NAS，无需长期保存额外副本。"
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         LSSupportsOpeningDocumentsInPlace: true
@@ -64,6 +68,34 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+
+  FileMannShare:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: FileMannShare
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.share
+        CODE_SIGN_ENTITLEMENTS: FileMannShare/FileMannShare.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: FileMannShare/Info.plist
+      properties:
+        CFBundleDisplayName: "传送到 FileMann"
+        CFBundleShortVersionString: "1.3.0"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.share-services
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
+          NSExtensionAttributes:
+            NSExtensionActivationRule:
+              NSExtensionActivationSupportsImageWithMaxCount: 50
+              NSExtensionActivationSupportsMovieWithMaxCount: 50
 
   FileMannTests:
     type: bundle.unit-test
