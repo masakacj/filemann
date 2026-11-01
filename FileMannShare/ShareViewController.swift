@@ -130,9 +130,18 @@ final class ShareViewController: UIViewController {
                 identifier = nil
             }
             guard let identifier else { continue }
+            let originalName = provider.suggestedName ?? "shared-media"
+            let fileName: String
+            if (originalName as NSString).pathExtension.isEmpty {
+                let fileExtension = UTType(identifier)?
+                    .preferredFilenameExtension ?? "bin"
+                fileName = originalName + "." + fileExtension
+            } else {
+                fileName = originalName
+            }
             let destination = inbox.appendingPathComponent(
                 UUID().uuidString.lowercased() + "__" +
-                    safeName(provider.suggestedName ?? "shared-media")
+                    safeName(fileName)
             )
 
             try await withCheckedThrowingContinuation {
