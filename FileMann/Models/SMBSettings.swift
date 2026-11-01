@@ -58,7 +58,7 @@ struct SMBSettings: Codable, Equatable {
     // forms without ever treating a subfolder as a share.
     private var smbURLParts: (server: String, share: String, directory: String) {
         var address = host.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\\\", with: "/")
+            .replacingOccurrences(of: "\\", with: "/")
         if address.lowercased().hasPrefix("smb://") {
             address = String(address.dropFirst(6))
         }
@@ -68,7 +68,7 @@ struct SMBSettings: Codable, Equatable {
               components.user == nil, components.password == nil else {
             return ("", "", "")
         }
-        let hostPort = server + (components.port.map { ":\\($0)" } ?? "")
+        let hostPort = server + (components.port.map { ":" + String($0) } ?? "")
         let pieces = components.path.split(separator: "/").map(String.init)
         return (
             hostPort,
