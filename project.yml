@@ -81,6 +81,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: FileMannShare/FileMannShare.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SWIFT_VERSION: 5.0
+        CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
     info:
