@@ -8,6 +8,8 @@ enum ArchiveServiceError: LocalizedError {
     case remoteConflict(String)
     case remoteVerificationFailed
     case emptyRead
+    case smbConnectionFailed(host: String, share: String, reason: String)
+    case smbWriteCheckFailed(path: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +25,10 @@ enum ArchiveServiceError: LocalizedError {
             return "NAS 文件大小校验失败"
         case .emptyRead:
             return "读取源文件时提前结束"
+        case .smbConnectionFailed(let host, let share, let reason):
+            return "SMB 无法连接 smb://\(host)/\(share)：\(reason)。共享名是 SMB 顶层共享（如 storage），不是 Documentsf/Apps 这样的子目录。请确认账号与 nPlayer 一致。"
+        case .smbWriteCheckFailed(let path, let reason):
+            return "SMB 可以连接但无法写入 /\(path)：\(reason)。请确认共享目录具有写入权限。"
         }
     }
 }
@@ -58,11 +64,13 @@ final class SMBArchiveService {
         guard let url = URL(string: "smb://\(settings.normalizedHost)"),
               let client = SMB2Manager(
                 url: url,
-                credential: URLCredential(
-                    user: settings.username,
-                    password: password,
-                    persistence: .forSession
-                )
+                credential: settings.username.isEmpty
+                    ? nil
+                    : URLCredential(
+                        user: settings.username,
+                        password: password,
+                        persistence: .forSession
+                    )
               ) else {
             throw ArchiveServiceError.invalidServer
         }
@@ -71,19 +79,65 @@ final class SMBArchiveService {
         self.manager = client
     }
 
+    private func connectShare() async throws {
+        guard !settings.normalizedHost.isEmpty,
+              !settings.normalizedShare.isEmpty else {
+            throw ArchiveServiceError.invalidServer
+        }
+        do {
+            try await manager.connectShare(name: settings.normalizedShare)
+        } catch {
+            throw ArchiveServiceError.smbConnectionFailed(
+                host: settings.normalizedHost,
+                share: settings.normalizedShare,
+                reason: error.localizedDescription
+            )
+        }
+    }
+
     func connectAndPrepare() async throws {
-        try await manager.connectShare(name: settings.normalizedShare)
+        try await connectShare()
         try await ensureRemoteDirectory()
     }
 
+    /// SMB shares are different from folders. Use the NAS share enumeration
+    /// rather than guessing that a full path is a share name.
+    func listAvailableShares() async throws -> [String] {
+        let found = try await manager.listShares()
+        return found.map { $0.name }.sorted()
+    }
+
     func testConnection() async throws {
-        try await connectAndPrepare()
-        let path = settings.normalizedDirectory.isEmpty ? "/" : settings.normalizedDirectory
+        try await connectShare()
+        let path = settings.normalizedDirectory.isEmpty
+            ? "/" : settings.normalizedDirectory
         _ = try await manager.contentsOfDirectory(atPath: path)
+
+        // A successful SMB login/list is not a write-permission test.
+        // Use a uniquely named temporary file only; never touch media files.
+        let name = "filemann-smb-check-" + UUID().uuidString.lowercased()
+        let temporary = join(settings.normalizedDirectory, name + ".tmp")
+        let renamed = join(settings.normalizedDirectory, name + ".verified")
+        do {
+            try await manager.write(
+                data: Data("FileMann SMB write check".utf8),
+                toPath: temporary,
+                progress: nil
+            )
+            try await manager.moveItem(atPath: temporary, toPath: renamed)
+            try await manager.removeFile(atPath: renamed)
+        } catch {
+            try? await manager.removeFile(atPath: temporary)
+            try? await manager.removeFile(atPath: renamed)
+            throw ArchiveServiceError.smbWriteCheckFailed(
+                path: temporary,
+                reason: error.localizedDescription
+            )
+        }
     }
 
     func listDirectories(at path: String) async throws -> [SMBDirectoryEntry] {
-        try await manager.connectShare(name: settings.normalizedShare)
+        try await connectShare()
         let queryPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         let attributes = try await manager.contentsOfDirectory(atPath: queryPath.isEmpty ? "/" : queryPath)
         return attributes.compactMap { item in
