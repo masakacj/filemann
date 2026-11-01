@@ -52,28 +52,66 @@ struct SMBSettings: Codable, Equatable {
     // Never delete original photos or mapped files by default.
     var deleteAfterArchive: Bool = false
 
+    // nPlayer / Files commonly accepts an SMB URL or UNC path such as
+    // smb://nas/storage/Documentsf/Apps. AMSMB2, however, requires the
+    // server and share name as two *separate* arguments. Normalize both
+    // forms without ever treating a subfolder as a share.
+    private var smbURLParts: (server: String, share: String, directory: String) {
+        var address = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\\\", with: "/")
+        if address.lowercased().hasPrefix("smb://") {
+            address = String(address.dropFirst(6))
+        }
+        address = address.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let components = URLComponents(string: "smb://" + address),
+              let server = components.host, !server.isEmpty,
+              components.user == nil, components.password == nil else {
+            return ("", "", "")
+        }
+        let hostPort = server + (components.port.map { ":\\($0)" } ?? "")
+        let pieces = components.path.split(separator: "/").map(String.init)
+        return (
+            hostPort,
+            pieces.first?.removingPercentEncoding ?? "",
+            pieces.dropFirst().joined(separator: "/")
+        )
+    }
+
     var normalizedHost: String {
-        host
-            .replacingOccurrences(
-                of: "smb://",
-                with: "",
-                options: [.caseInsensitive]
-            )
-            .trimmingCharacters(
-                in: CharacterSet(charactersIn: "/ ")
-            )
+        smbURLParts.server
     }
 
     var normalizedShare: String {
-        share.trimmingCharacters(
+        let value = share.trimmingCharacters(
             in: CharacterSet(charactersIn: "/ ")
         )
+        let explicit = value.split(separator: "/").first.map(String.init) ?? ""
+        return explicit.isEmpty ? smbURLParts.share : explicit
     }
 
     var normalizedDirectory: String {
-        remoteDirectory.trimmingCharacters(
+        let explicit = remoteDirectory.trimmingCharacters(
             in: CharacterSet(charactersIn: "/ ")
         )
+        if !explicit.isEmpty { return explicit }
+
+        let fromShare = share.trimmingCharacters(
+            in: CharacterSet(charactersIn: "/ ")
+        )
+        .split(separator: "/")
+        .dropFirst()
+        .joined(separator: "/")
+        return fromShare.isEmpty ? smbURLParts.directory : fromShare
+    }
+
+    var smbConnectionSummary: String {
+        guard !normalizedHost.isEmpty else { return "服务器未配置" }
+        let base = "smb://" + normalizedHost
+        let fullShare = normalizedShare.isEmpty
+            ? "" : "/" + normalizedShare
+        let path = normalizedDirectory.isEmpty
+            ? "" : "/" + normalizedDirectory
+        return base + fullShare + path
     }
 
     var normalizedWebDAVDirectory: String {
