@@ -16,6 +16,7 @@ final class FileMannAppDelegate: NSObject, UIApplicationDelegate {
 
 @main
 struct FileMannApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(FileMannAppDelegate.self)
     private var appDelegate
 
@@ -35,6 +36,12 @@ struct FileMannApp: App {
                 .preferredColorScheme(.dark)
                 .onAppear {
                     _ = try? FileMannShared.inboxDirectory()
+                    viewModel.importShareInbox()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active {
+                        viewModel.importShareInbox()
+                    }
                 }
                 .task {
                     await FileMannCacheManager.shared
