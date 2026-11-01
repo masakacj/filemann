@@ -62,8 +62,16 @@ enum FileMannShareGroup {
         guard let url = Bundle.main.url(
             forResource: "embedded", withExtension: "mobileprovision"
         ),
-        let data = try? Data(contentsOf: url),
-        let start = data.range(of: Data("<?xml".utf8))?.lowerBound,
+        let data = try? Data(contentsOf: url) else {
+            return []
+        }
+        return provisionedGroups(in: data)
+    }
+
+    /// Parses only the XML plist segment, never executes content from a
+    /// provisioning profile. Internal for unit tests.
+    static func provisionedGroups(in data: Data) -> [String] {
+        guard let start = data.range(of: Data("<?xml".utf8))?.lowerBound,
         let end = data.range(of: Data("</plist>".utf8))?.upperBound,
         start < end else {
             return []
