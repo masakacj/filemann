@@ -313,6 +313,71 @@ final class SMBSettingsTests: XCTestCase {
         }
     }
 
+    func testPutOnlyNASUsesSafeDirectPUT() async throws {
+        let service = try mockWebDAVService(directory: "PutOnly")
+        let mode = try await service.preferredUploadMode()
+        XCTAssertEqual(mode, .directPut)
+
+        let path = "PutOnly/ios-" + UUID().uuidString + ".txt"
+        let body = Data("FileMann direct upload".utf8)
+        var request = try service.makeUploadRequest(
+            path: path,
+            failIfExists: true
+        )
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "If-None-Match"),
+            "*"
+        )
+        request.httpBody = body
+        let (_, created) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((created as? HTTPURLResponse)?.statusCode, 201)
+
+        let result = try await service.finalizeBackgroundUpload(
+            partialPath: path,
+            finalPath: path,
+            expectedBytes: Int64(body.count),
+            uploadMode: .directPut
+        )
+        XCTAssertEqual(result.remotePath, path)
+        XCTAssertEqual(result.remoteSize, Int64(body.count))
+
+        // A retry must never silently overwrite an existing NAS file.
+        var retry = try service.makeUploadRequest(
+            path: path,
+            failIfExists: true
+        )
+        retry.httpBody = Data("overwrite?".utf8)
+        let (_, refused) = try await URLSession.shared.data(for: retry)
+        XCTAssertEqual((refused as? HTTPURLResponse)?.statusCode, 412)
+        let savedSize = await service.remoteFileSize(atPath: path)
+        XCTAssertEqual(savedSize, Int64(body.count))
+        try await service.deleteRemoteFile(at: path)
+    }
+
+    func testRecursiveDuplicateScanWorksWithoutDepthInfinity() async throws {
+        let service = try mockWebDAVService(directory: "Album")
+        let data = try await service.downloadData(
+            path: "Album/Nested/nested.txt"
+        )
+        let source = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".txt")
+        try data.write(to: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+
+        let task = ArchiveTask(
+            bookmark: Data(),
+            displayName: "nested.txt",
+            remoteFileName: "nested.txt",
+            fileSize: Int64(data.count),
+            sourceModifiedAt: nil
+        )
+        let duplicate = try await service.findExactDuplicate(
+            task: task,
+            sourceURL: source
+        )
+        XCTAssertEqual(duplicate?.path, "Album/Nested/nested.txt")
+    }
+
     private func mockWebDAVService(
         directory: String
     ) throws -> WebDAVArchiveService {
