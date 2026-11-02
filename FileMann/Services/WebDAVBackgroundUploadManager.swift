@@ -215,6 +215,18 @@ final class WebDAVBackgroundUploadManager: NSObject {
 extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDelegate {
     func urlSession(
         _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        // Do not silently upload media to a reverse proxy login page,
+        // another share, or a different host.
+        completionHandler(nil)
+    }
+
+    func urlSession(
+        _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (
             URLSession.AuthChallengeDisposition,
@@ -307,7 +319,9 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
             let status = (task.response as? HTTPURLResponse)?.statusCode ?? -1
             postFailure(
                 taskID: descriptor.taskID,
-                message: status >= 0 ? "HTTP \(status)" : "上传未收到有效响应"
+                message: status >= 300 && status < 400
+                    ? "WebDAV PUT 返回重定向 HTTP \(status)；请修正真正的写入 URL，未确认归档"
+                    : (status >= 0 ? "HTTP \(status)" : "上传未收到有效响应")
             )
             return
         }
@@ -317,38 +331,19 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
                 let settings = TaskStore.loadSettings()
                 let password = KeychainStore.loadWebDAVPassword()
 
-                var service = try WebDAVArchiveService(
+                // Never silently validate a file on a different endpoint:
+                // LAN and WAN WebDAV can expose different share-root paths.
+                let service = try WebDAVArchiveService(
                     settings: settings,
                     password: password,
                     baseURLString: descriptor.baseURLString
                 )
-
-                let result: ArchiveResult
-                do {
-                    result = try await service.finalizeBackgroundUpload(
-                        partialPath: descriptor.partialPath,
-                        finalPath: descriptor.finalPath,
-                        expectedBytes: descriptor.expectedBytes,
-                        uploadMode: descriptor.uploadMode ?? .atomicMove
-                    )
-                } catch {
-                    let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
-                        settings: settings,
-                        password: password,
-                        forceRemote: true
-                    )
-                    service = try WebDAVArchiveService(
-                        settings: settings,
-                        password: password,
-                        baseURLString: resolved
-                    )
-                    result = try await service.finalizeBackgroundUpload(
-                        partialPath: descriptor.partialPath,
-                        finalPath: descriptor.finalPath,
-                        expectedBytes: descriptor.expectedBytes,
-                        uploadMode: descriptor.uploadMode ?? .atomicMove
-                    )
-                }
+                let result = try await service.finalizeBackgroundUpload(
+                    partialPath: descriptor.partialPath,
+                    finalPath: descriptor.finalPath,
+                    expectedBytes: descriptor.expectedBytes,
+                    uploadMode: descriptor.uploadMode ?? .atomicMove
+                )
 
                 NotificationCenter.default.post(
                     name: .fileMannWebDAVCompleted,
@@ -356,13 +351,14 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
                     userInfo: [
                         "taskID": descriptor.taskID,
                         "remotePath": result.remotePath,
-                        "remoteSize": result.remoteSize
+                        "remoteSize": result.remoteSize,
+                        "remoteEndpointURL": descriptor.baseURLString
                     ]
                 )
             } catch {
                 postFailure(
                     taskID: descriptor.taskID,
-                    message: "服务器校验/落盘失败：\(error.localizedDescription)"
+                    message: "原始上传端点的目标目录尚未确认文件，已禁止跨端点误判：\(error.localizedDescription)"
                 )
             }
         }
