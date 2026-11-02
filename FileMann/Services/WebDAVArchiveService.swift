@@ -1135,7 +1135,10 @@ final class WebDAVArchiveService {
             )?.path ?? href
         }
 
-        let decoded = rawPath.removingPercentEncoding ?? rawPath
+        // URL.path already decodes the escaped href. Decoding a second
+        // time changes a literal "%20" in an original filename to a
+        // space and makes exact-name verification fail.
+        let decoded = rawPath
         let root = baseURL.path
             .trimmingCharacters(
                 in: CharacterSet(charactersIn: "/")
@@ -1219,8 +1222,10 @@ final class WebDAVArchiveService {
     }
 
     private func normalize(_ value: String) -> String {
+        // Only remove path separators, not user filename whitespace.
+        // The archive must not silently change "clip .MOV" to "clip.MOV".
         value.trimmingCharacters(
-            in: CharacterSet(charactersIn: "/ ")
+            in: CharacterSet(charactersIn: "/")
         )
     }
 
