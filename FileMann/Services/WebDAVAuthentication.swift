@@ -30,18 +30,24 @@ enum WebDAVChallengeHandler {
         }()
 
         if method == NSURLAuthenticationMethodServerTrust {
-            if allowInvalidCertificate,
-               hostMatches,
-               let trust = protectionSpace.serverTrust {
-                completionHandler(
-                    .useCredential,
-                    URLCredential(trust: trust)
-                )
+            guard hostMatches, let trust = protectionSpace.serverTrust else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+
+            // A user may separately verify and pin one exact NAS leaf
+            // certificate. A changed cert, different host, or different port
+            // will never inherit this trust. Otherwise keep iOS validation.
+            if let host = trustedHost, let port = trustedPort,
+               WebDAVCertificateTrust.matches(
+                   trust: trust, host: host, port: port
+               ) {
+                completionHandler(.useCredential, URLCredential(trust: trust))
+            } else if allowInvalidCertificate {
+                // Legacy local-LAN compatibility only; WAN cannot enable it.
+                completionHandler(.useCredential, URLCredential(trust: trust))
             } else {
-                completionHandler(
-                    .performDefaultHandling,
-                    nil
-                )
+                completionHandler(.performDefaultHandling, nil)
             }
             return
         }
