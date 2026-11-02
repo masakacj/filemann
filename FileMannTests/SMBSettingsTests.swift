@@ -51,7 +51,7 @@ final class SMBSettingsTests: XCTestCase {
                 port: 5001
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             settings.webDAVAllowsInvalidCertificate(
                 host: "nas.example.com",
                 port: 18443
