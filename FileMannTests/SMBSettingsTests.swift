@@ -391,6 +391,71 @@ final class SMBSettingsTests: XCTestCase {
         try await service.deleteRemoteFile(at: path)
     }
 
+    func testWebDAVPreservesUnicodeSpacesAndLiteralPercentFilename() async throws {
+        let service = try mockWebDAVService(directory: "PutOnly")
+        let name = "原始🌷 #01 +100%20 空格.MP4"
+        let path = "PutOnly/" + name
+        let data = Data("original filename must survive WebDAV".utf8)
+
+        var request = try service.makeUploadRequest(
+            path: path,
+            failIfExists: true
+        )
+        XCTAssertTrue(request.url!.absoluteString.contains("%2520"))
+        request.httpBody = data
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 201)
+
+        let result = try await service.finalizeBackgroundUpload(
+            partialPath: path,
+            finalPath: path,
+            expectedBytes: Int64(data.count),
+            uploadMode: .directPut
+        )
+        XCTAssertEqual(result.remotePath, path)
+        XCTAssertEqual(try await service.downloadData(path: path), data)
+        try await service.deleteRemoteFile(at: path)
+    }
+
+    func testWebDAVCollisionSuffixDoesNotOverwriteOriginal() async throws {
+        let service = try mockWebDAVService(directory: "PutOnly")
+        let originalName = "🌸 原文件.MOV"
+        let firstPath = "PutOnly/" + originalName
+        let secondPath = "PutOnly/" +
+            FileMannShareFileNaming.addingDuplicateSuffix(
+                to: originalName, number: 2
+            )
+        let originalBytes = Data("original".utf8)
+        let secondBytes = Data("another original".utf8)
+
+        var first = try service.makeUploadRequest(
+            path: firstPath,
+            failIfExists: true
+        )
+        first.httpBody = originalBytes
+        let (_, firstResponse) = try await URLSession.shared.data(for: first)
+        XCTAssertEqual((firstResponse as? HTTPURLResponse)?.statusCode, 201)
+
+        var second = try service.makeUploadRequest(
+            path: secondPath,
+            failIfExists: true
+        )
+        second.httpBody = secondBytes
+        let (_, secondResponse) = try await URLSession.shared.data(for: second)
+        XCTAssertEqual((secondResponse as? HTTPURLResponse)?.statusCode, 201)
+
+        let archived = try await service.verifyPublishedFile(
+            at: secondPath,
+            expectedBytes: Int64(secondBytes.count)
+        )
+        XCTAssertEqual(archived.remotePath, "PutOnly/🌸 原文件 (2).MOV")
+        XCTAssertEqual(try await service.downloadData(path: firstPath), originalBytes)
+        XCTAssertEqual(try await service.downloadData(path: secondPath), secondBytes)
+        try await service.deleteRemoteFile(at: firstPath)
+        try await service.deleteRemoteFile(at: secondPath)
+    }
+
     func testRecursiveDuplicateScanWorksWithoutDepthInfinity() async throws {
         let service = try mockWebDAVService(directory: "Album")
         let data = try await service.downloadData(
