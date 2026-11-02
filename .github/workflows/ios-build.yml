@@ -97,19 +97,33 @@ jobs:
           xcrun simctl boot "$SIM_UDID" || true
           xcrun simctl bootstatus "$SIM_UDID" -b
 
-          # The app enforces valid TLS on remote endpoints. Trust an ephemeral
-          # test-only CA on this simulator; do not disable production checks.
+          # A private CI CA is added to the simulator trust store.
+          # No app-side TLS trust bypass is used, and no persistent CA is kept.
+          printf '%s\n' \
+            '[req]' \
+            'distinguished_name=dn' \
+            'x509_extensions=v3_ca' \
+            'prompt=no' \
+            '[dn]' \
+            'CN=FileMann Mock WebDAV CA' \
+            '[v3_ca]' \
+            'basicConstraints=critical,CA:TRUE' \
+            'keyUsage=critical,keyCertSign,cRLSign' \
+            'subjectKeyIdentifier=hash' \
+            > build/mock-webdav/root.cnf
           openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
             -keyout build/mock-webdav/root-key.pem \
             -out build/mock-webdav/root-cert.pem \
-            -days 1 -subj '/CN=FileMann Mock WebDAV CA' \
-            -addext 'basicConstraints=critical,CA:TRUE' \
-            -addext 'keyUsage=critical,keyCertSign,cRLSign' >/dev/null 2>&1
+            -days 1 -config build/mock-webdav/root.cnf >/dev/null 2>&1
           openssl req -newkey rsa:2048 -nodes -sha256 \
             -keyout build/mock-webdav/key.pem \
             -out build/mock-webdav/server.csr \
             -subj '/CN=localhost' >/dev/null 2>&1
-          printf 'subjectAltName=IP:127.0.0.1,DNS:localhost\\nextendedKeyUsage=serverAuth\\nkeyUsage=digitalSignature,keyEncipherment\\n' \
+          printf '%s\n' \
+            'basicConstraints=critical,CA:FALSE' \
+            'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+            'extendedKeyUsage=serverAuth' \
+            'keyUsage=digitalSignature,keyEncipherment' \
             > build/mock-webdav/server.ext
           openssl x509 -req -in build/mock-webdav/server.csr \
             -CA build/mock-webdav/root-cert.pem \
