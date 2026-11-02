@@ -119,75 +119,11 @@ final class ShareViewController: UIViewController {
                 } ?? supported.first
                 guard let identifier else { continue }
 
-                let name = provider.suggestedName ?? "shared-media"
-                let fileName: String
-                if (name as NSString).pathExtension.isEmpty {
-                    let ext = UTType(identifier)?
-                        .preferredFilenameExtension ?? "bin"
-                    fileName = name + "." + ext
-                } else {
-                    fileName = name
-                }
-                let destination = inbox.appendingPathComponent(
-                    UUID().uuidString.lowercased() + "__" +
-                        safeName(fileName)
+                let destination = try await stageMedia(
+                    provider,
+                    typeIdentifier: identifier,
+                    inbox: inbox
                 )
-
-                // Ask the provider for in-place access first. This avoids a
-                // Photos export copy when supported. NSFileCoordinator is
-                // required even if the provider supplies a temporary file.
-                try await withCheckedThrowingContinuation {
-                    (continuation: CheckedContinuation<Void, Error>) in
-                    provider.loadInPlaceFileRepresentation(
-                        forTypeIdentifier: identifier
-                    ) { url, _, error in
-                        guard let url else {
-                            continuation.resume(
-                                throwing: error ?? ShareError.providerFailed
-                            )
-                            return
-                        }
-
-                        let scoped = url.startAccessingSecurityScopedResource()
-                        defer {
-                            if scoped { url.stopAccessingSecurityScopedResource() }
-                        }
-                        var coordinationError: NSError?
-                        var transferError: Error?
-
-                        NSFileCoordinator(filePresenter: nil).coordinate(
-                            readingItemAt: url,
-                            options: [],
-                            error: &coordinationError
-                        ) { source in
-                            do {
-                                // Same-volume hard links share data blocks.
-                                // Copy only when the provider or sandbox
-                                // disallows a hard link.
-                                do {
-                                    try FileManager.default.linkItem(
-                                        at: source, to: destination
-                                    )
-                                } catch {
-                                    try FileManager.default.copyItem(
-                                        at: source, to: destination
-                                    )
-                                }
-                            } catch {
-                                transferError = error
-                            }
-                        }
-
-                        if let issue = transferError ?? coordinationError {
-                            try? FileManager.default.removeItem(
-                                at: destination
-                            )
-                            continuation.resume(throwing: issue)
-                        } else {
-                            continuation.resume()
-                        }
-                    }
-                }
                 created.append(destination)
             }
             return created.count
@@ -201,15 +137,58 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func safeName(_ name: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(
-            CharacterSet(charactersIn: "._- ")
-        )
-        let result = String(
-            name.unicodeScalars.map {
-                allowed.contains($0) ? Character($0) : "_"
+    /// NSItemProvider URLs may be invalid as soon as their callback returns.
+    /// Resolve the real source filename and stage the file *inside* the
+    /// callback. Photos providers that do not offer an in-place URL can
+    /// still supply a temporary file representation.
+    private func stageMedia(
+        _ provider: NSItemProvider,
+        typeIdentifier: String,
+        inbox: URL
+    ) async throws -> URL {
+        try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<URL, Error>) in
+
+            provider.loadInPlaceFileRepresentation(
+                forTypeIdentifier: typeIdentifier
+            ) { url, _, _ in
+                if let url {
+                    do {
+                        let stored = try FileMannShareFileNaming.stage(
+                            sourceURL: url,
+                            suggestedName: provider.suggestedName,
+                            typeIdentifier: typeIdentifier,
+                            in: inbox
+                        )
+                        continuation.resume(returning: stored)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                    return
+                }
+
+                provider.loadFileRepresentation(
+                    forTypeIdentifier: typeIdentifier
+                ) { temporaryURL, error in
+                    guard let temporaryURL else {
+                        continuation.resume(
+                            throwing: error ?? ShareError.providerFailed
+                        )
+                        return
+                    }
+                    do {
+                        let stored = try FileMannShareFileNaming.stage(
+                            sourceURL: temporaryURL,
+                            suggestedName: provider.suggestedName,
+                            typeIdentifier: typeIdentifier,
+                            in: inbox
+                        )
+                        continuation.resume(returning: stored)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
             }
-        )
-        return String(result.prefix(160)).isEmpty ? "media" : result
+        }
     }
 }
