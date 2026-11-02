@@ -402,7 +402,7 @@ final class ArchiveViewModel: ObservableObject {
         } catch {
             throw NSError(
                 domain: "FileMann.WebDAV.WritePermission",
-                code: 403,
+                code: (error as NSError).code,
                 userInfo: [
                     NSLocalizedDescriptionKey:
                         "目标地址：\(service.baseURLString)" +
