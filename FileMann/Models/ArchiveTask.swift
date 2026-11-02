@@ -22,6 +22,11 @@ enum ArchiveTaskState: String, Codable {
     }
 }
 
+enum ArchiveCompletionKind: String, Codable {
+    case uploaded
+    case alreadyOnNAS
+}
+
 struct ArchiveTask: Identifiable, Codable, Equatable {
     let id: UUID
     var bookmark: Data
@@ -33,6 +38,40 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
     /// Disposable App Group share staging; never a Photos library original.
     var isShareStaging: Bool?
     var remoteVerifiedPath: String?
+    /// Exact WebDAV base used by the upload, including its URL path prefix.
+    /// Never infer this from a later local/WAN fallback.
+    var remoteEndpointURL: String?
+    /// Proposed file location, retained even when final verification fails.
+    var attemptedRemotePath: String?
+    /// Set only after the file appears in the actual parent's Depth:1 listing.
+    var verifiedAt: Date?
+    var completionKind: ArchiveCompletionKind?
+
+    var remoteAbsoluteURL: String? {
+        guard let endpoint = remoteEndpointURL,
+              let base = URL(string: endpoint),
+              let path = remoteVerifiedPath ?? attemptedRemotePath else {
+            return nil
+        }
+        var url = base
+        for segment in path.split(separator: "/") {
+            url.appendPathComponent(String(segment))
+        }
+        return url.absoluteString
+    }
+
+    var completionDescription: String {
+        if completionKind == .alreadyOnNAS {
+            return "复用 NAS 已有副本，未新增文件"
+        }
+        if state == .completed && verifiedAt == nil {
+            return "旧版仅按大小判定，请重新核验实际路径"
+        }
+        if state == .completed {
+            return "目标目录中已确认文件"
+        }
+        return state.title
+    }
     var shouldDeleteSource: Bool?
     var fileSize: Int64
     var sourceModifiedAt: Date?
@@ -66,6 +105,10 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
         self.sourceRelativePath = sourceRelativePath
         self.isShareStaging = nil
         self.remoteVerifiedPath = nil
+        self.remoteEndpointURL = nil
+        self.attemptedRemotePath = nil
+        self.verifiedAt = nil
+        self.completionKind = nil
         self.shouldDeleteSource = nil
         self.fileSize = fileSize
         self.sourceModifiedAt = sourceModifiedAt
