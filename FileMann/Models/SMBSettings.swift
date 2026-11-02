@@ -1,5 +1,7 @@
 import Foundation
 
+// Keep .smb only for decoding historic settings; the UI and archive
+// scheduler expose WebDAV exclusively.
 enum ArchiveTransport: String, Codable, CaseIterable, Identifiable {
     case webDAV
     case smb
@@ -513,6 +515,10 @@ struct SMBSettings: Codable, Equatable {
             webDAVRemotePath = legacy.path
             webDAVRemoteHTTPS = legacy.https
         }
+
+        // Legacy WAN HTTP entries must migrate to HTTPS, never remain active.
+        webDAVRemoteHTTPS = true
+        webDAVRemoteAllowInvalidCertificate = false
     }
 
     func encode(to encoder: Encoder) throws {
