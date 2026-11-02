@@ -172,7 +172,7 @@ private struct ArchiveInlineTaskRow: View {
 
                 Menu {
                     if task.isShareStaging == true &&
-                        [.queued, .paused, .failed, .missingSource]
+                        [.queued, .failed, .missingSource]
                             .contains(task.state) {
                         Button {
                             filenameDraft = task.displayName
