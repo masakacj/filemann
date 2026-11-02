@@ -534,6 +534,191 @@ final class ArchiveViewModel: ObservableObject {
         persistDuplicates()
     }
 
+    /// Rename only the queued share import. The App Group staging filename
+    /// and Photos original are unaffected; only the future NAS name changes.
+    func renameQueuedSharedMedia(_ task: ArchiveTask, to proposed: String) {
+        guard !isRunning,
+              let index = tasks.firstIndex(where: { $0.id == task.id }),
+              tasks[index].isShareStaging == true,
+              [.queued, .paused, .failed, .missingSource]
+                  .contains(tasks[index].state) else {
+            statusMessage = "只能修改尚未归档的相册分享文件"
+            return
+        }
+        let raw = (proposed.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ) as NSString).lastPathComponent
+        guard !raw.isEmpty, raw != ".", raw != ".." else {
+            statusMessage = "请输入有效的文件名"
+            return
+        }
+        let existingExtension =
+            (tasks[index].displayName as NSString).pathExtension
+        let extensionName = (raw as NSString).pathExtension
+        let base = extensionName.isEmpty
+            ? raw : (raw as NSString).deletingPathExtension
+        let allowed = CharacterSet.alphanumerics.union(
+            CharacterSet(charactersIn: "._- ()[]")
+        )
+        let cleanBase = String(base.unicodeScalars.map {
+            allowed.contains($0) ? Character($0) : "_"
+        }).trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+        guard !cleanBase.isEmpty else {
+            statusMessage = "文件名不能为空"
+            return
+        }
+        let ext = extensionName.isEmpty
+            ? existingExtension : extensionName
+        let safeExtension = String(ext.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) ? Character($0) : "_"
+        })
+        let renamed = String(cleanBase.prefix(140)) +
+            (safeExtension.isEmpty ? "" : "." + safeExtension)
+        let otherNames = Set(tasks.filter { $0.id != task.id }
+            .map { $0.remoteFileName.lowercased() })
+        var remoteName = renamed
+        var sequence = 2
+        while otherNames.contains(remoteName.lowercased()) {
+            let stem = (renamed as NSString).deletingPathExtension
+            let suffix = (renamed as NSString).pathExtension
+            remoteName = stem + " (\(sequence))" +
+                (suffix.isEmpty ? "" : "." + suffix)
+            sequence += 1
+        }
+        tasks[index].displayName = renamed
+        tasks[index].remoteFileName = remoteName
+        tasks[index].remoteRelativePath = nil
+        tasks[index].remoteEndpointURL = nil
+        tasks[index].attemptedRemotePath = nil
+        tasks[index].remoteVerifiedPath = nil
+        tasks[index].verifiedAt = nil
+        tasks[index].completionKind = nil
+        tasks[index].transferredBytes = 0
+        tasks[index].state = .queued
+        tasks[index].errorMessage = nil
+        duplicateCandidates.removeAll { $0.taskID == task.id }
+        invalidateVerification()
+        persistTasks()
+        persistDuplicates()
+        statusMessage = "归档文件名已改为 \(remoteName)，相册原件不受影响"
+    }
+
+    /// Diagnose old success records without modifying any NAS or phone file.
+    /// A legacy same-name/same-size match is a location *candidate*, not
+    /// proof that the old upload actually wrote this file.
+    func recheckCompletedArchives() {
+        guard !isRecheckingArchives, !isRunning else { return }
+        isRecheckingArchives = true
+        statusMessage = "正在只读核验任务记录对应的实际 NAS 路径…"
+        Task {
+            defer {
+                isRecheckingArchives = false
+                persistTasks()
+            }
+            var confirmed = 0
+            var foundLegacy = 0
+            var missing = 0
+            for index in tasks.indices {
+                guard tasks[index].state == .completed else { continue }
+                let snapshot = tasks[index]
+                let path = snapshot.remoteVerifiedPath ??
+                    snapshot.attemptedRemotePath ??
+                    (snapshot.remoteRelativePath ?? snapshot.remoteFileName)
+                let endpoints = snapshot.remoteEndpointURL.map { [$0] } ??
+                    settings.webDAVCandidateBaseURLs
+                var located = false
+
+                for endpoint in endpoints {
+                    do {
+                        let service = try WebDAVArchiveService(
+                            settings: settings,
+                            password: webDAVPassword,
+                            baseURLString: endpoint
+                        )
+                        let result = try await service.verifyPublishedFile(
+                            at: path,
+                            expectedBytes: snapshot.fileSize
+                        )
+                        tasks[index].remoteEndpointURL = endpoint
+                        tasks[index].remoteVerifiedPath = result.remotePath
+                        tasks[index].attemptedRemotePath = path
+
+                        if snapshot.verifiedAt != nil {
+                            tasks[index].verifiedAt = Date()
+                            tasks[index].errorMessage = "已在原上传端点的目标目录重新确认"
+                            confirmed += 1
+                        } else {
+                            // Old app did not record its upload endpoint.
+                            // Do not equate a size match to proven delivery.
+                            tasks[index].verifiedAt = nil
+                            tasks[index].errorMessage =
+                                "旧版上传来源未记录：已发现同名同大小候选文件，" +
+                                "但不能确认就是本次上传；不会自动删除原件"
+                            foundLegacy += 1
+                        }
+                        located = true
+                        break
+                    } catch {
+                        continue
+                    }
+                }
+                if !located {
+                    tasks[index].verifiedAt = nil
+                    tasks[index].errorMessage =
+                        "未在记录的 WebDAV 目录中找到该文件；请核对实际共享映射"
+                    missing += 1
+                }
+            }
+            lastVerification = await verifyRecordedWebDAVManifest()
+            TaskStore.saveVerification(lastVerification)
+            statusMessage =
+                "核验结束：确认 \(confirmed) 个；旧版找到候选 \(foundLegacy) 个；" +
+                "未找到 \(missing) 个。点击任务查看并复制实际地址。"
+        }
+    }
+
+    /// Never verify a batch via whatever endpoint happens to be reachable
+    /// now. Only the server that performed each individual upload counts.
+    private func verifyRecordedWebDAVManifest() async -> BatchVerification {
+        let expected = tasks.filter { $0.state != .skipped }
+        var count = 0
+        var verifiedBytes: Int64 = 0
+
+        for snapshot in expected {
+            guard snapshot.state == .completed,
+                  snapshot.verifiedAt != nil,
+                  let baseURL = snapshot.remoteEndpointURL,
+                  let path = snapshot.remoteVerifiedPath else {
+                continue
+            }
+            do {
+                let service = try WebDAVArchiveService(
+                    settings: settings,
+                    password: webDAVPassword,
+                    baseURLString: baseURL
+                )
+                let result = try await service.verifyPublishedFile(
+                    at: path,
+                    expectedBytes: snapshot.fileSize
+                )
+                count += 1
+                verifiedBytes += result.remoteSize
+            } catch {
+                continue
+            }
+        }
+
+        return BatchVerification(
+            expectedCount: expected.count,
+            expectedBytes: expected.reduce(Int64(0)) {
+                $0 + $1.fileSize
+            },
+            verifiedCount: count,
+            verifiedBytes: verifiedBytes,
+            checkedAt: Date()
+        )
+    }
+
     func clearCompleted() {
         let removedIDs = Set(tasks.filter {
             ($0.state == .completed && $0.verifiedAt != nil) ||
