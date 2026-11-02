@@ -1147,6 +1147,12 @@ final class ArchiveViewModel: ObservableObject {
                 tasks.contains(where: {
                     $0.isShareStaging == true && !$0.sourceDeleted
                 }) {
+                // Used only to safely clean local sources after a
+                // per-endpoint remote manifest check has passed.
+                let service = try WebDAVArchiveService(
+                    settings: settings,
+                    password: webDAVPassword
+                )
                 var deletionFailures = 0
 
                 for index in tasks.indices {
