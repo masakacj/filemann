@@ -414,7 +414,8 @@ final class SMBSettingsTests: XCTestCase {
             uploadMode: .directPut
         )
         XCTAssertEqual(result.remotePath, path)
-        XCTAssertEqual(try await service.downloadData(path: path), data)
+        let downloaded = try await service.downloadData(path: path)
+        XCTAssertEqual(downloaded, data)
         try await service.deleteRemoteFile(at: path)
     }
 
@@ -450,8 +451,10 @@ final class SMBSettingsTests: XCTestCase {
             expectedBytes: Int64(secondBytes.count)
         )
         XCTAssertEqual(archived.remotePath, "PutOnly/🌸 原文件 (2).MOV")
-        XCTAssertEqual(try await service.downloadData(path: firstPath), originalBytes)
-        XCTAssertEqual(try await service.downloadData(path: secondPath), secondBytes)
+        let keptOriginal = try await service.downloadData(path: firstPath)
+        let keptSecond = try await service.downloadData(path: secondPath)
+        XCTAssertEqual(keptOriginal, originalBytes)
+        XCTAssertEqual(keptSecond, secondBytes)
         try await service.deleteRemoteFile(at: firstPath)
         try await service.deleteRemoteFile(at: secondPath)
     }
