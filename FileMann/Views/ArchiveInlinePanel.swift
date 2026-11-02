@@ -162,7 +162,8 @@ private struct ArchiveInlineTaskRow: View {
 
                 Text(task.displayName)
                     .font(.subheadline)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
 
                 Spacer()
 
@@ -211,6 +212,13 @@ private struct ArchiveInlineTaskRow: View {
                 }
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+            }
+
+            if task.remoteFileName != task.displayName {
+                Text("NAS 最终文件名：\(task.remoteFileName)")
+                    .font(.caption2)
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
             }
 
             if let url = task.remoteAbsoluteURL {
