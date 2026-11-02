@@ -215,6 +215,8 @@ jobs:
             NSExtensionActivationSupportsMovieWithMaxCount; do
             test "$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:$key" "$SHARE_PLIST")" = "1024"
           done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:NSExtensionActivationDictionaryVersion' "$SHARE_PLIST")" = "2"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:NSExtensionActivationUsesStrictMatching' "$SHARE_PLIST")" = "false"
           test ! -e "$APP_PATH/_CodeSignature"
           test ! -e "$APP_PATH/PlugIns/FileMannShare.appex/_CodeSignature"
 
@@ -255,6 +257,8 @@ jobs:
             NSExtensionActivationSupportsMovieWithMaxCount; do
             test "$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:$key" "$SHARE_PLIST")" = "1024"
           done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:NSExtensionActivationDictionaryVersion' "$SHARE_PLIST")" = "2"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:NSExtensionActivationUsesStrictMatching' "$SHARE_PLIST")" = "false"
           test ! -e "$APP/_CodeSignature"
           test ! -e "$APP/PlugIns/FileMannShare.appex/_CodeSignature"
           shasum -a 256 "$PWD/build/FileMann-unsigned.ipa"
