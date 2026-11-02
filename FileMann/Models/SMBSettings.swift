@@ -151,8 +151,8 @@ struct SMBSettings: Codable, Equatable {
             return true
         }
         let parts = host.split(separator: ".")
-        guard parts.count == 4,
-              let values = parts.map({ Int($0) }) as? [Int],
+        let values = parts.compactMap { Int($0) }
+        guard parts.count == 4, values.count == 4,
               values.allSatisfy({ (0...255).contains($0) }) else {
             return false
         }
