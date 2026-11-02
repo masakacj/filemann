@@ -33,7 +33,10 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        preferredContentSize = CGSize(width: 350, height: 260)
+        preferredContentSize = CGSize(
+            width: 360,
+            height: sharedProviders().count > 25 ? 340 : 260
+        )
 
         let title = UILabel()
         title.text = "添加到 FileMann"
@@ -121,6 +124,7 @@ final class ShareViewController: UIViewController {
                     // staged. Already-staged media is durable and remains
                     // available to FileMann after this extension exits.
                     partialImport = summary
+                    preferredContentSize = CGSize(width: 360, height: 360)
                     let detail = summary.firstErrors.prefix(2)
                         .joined(separator: "\n")
                     info.text =
