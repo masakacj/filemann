@@ -21,6 +21,7 @@ class State:
             "/photo.jpg": PHOTO,
             "/clip.mp4": CLIP,
             "/Album/sample.jpg": PHOTO,
+            "/Album/Nested/nested.txt": b"nested-file-for-depth-one",
         }
 
     def log(self, handler):
@@ -154,6 +155,11 @@ class Handler(BaseHTTPRequestHandler):
 
         path = self._path().rstrip("/") or "/"
         depth = self.headers.get("Depth", "0")
+        # Simulate NAS servers that allow browsing but forbid recursive
+        # Depth: infinity requests (common cause of sync-only HTTP 403).
+        if depth.lower() == "infinity":
+            self.send_error(403, "Depth infinity is forbidden")
+            return
         entries = []
 
         def add_response(href, collection=False, size=None, content_type=None):
@@ -194,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
             if depth != "0":
                 add_response("/Album/", collection=True)
                 add_response("/ReadOnly/", collection=True)
+                add_response("/PutOnly/", collection=True)
                 add_response(
                     "/photo.jpg",
                     size=len(PHOTO),
@@ -206,6 +213,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
         elif path == "/ReadOnly":
             add_response("/ReadOnly/", collection=True)
+        elif path == "/PutOnly":
+            add_response("/PutOnly/", collection=True)
         elif path == "/ParentDenied":
             # A NAS may grant the target folder but not listing its parent.
             self.send_error(403, "Parent directory cannot be listed")
@@ -215,11 +224,18 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/Album":
             add_response("/Album/", collection=True)
             if depth != "0":
+                add_response("/Album/Nested/", collection=True)
                 add_response(
                     "/Album/sample.jpg",
                     size=len(PHOTO),
                     content_type="image/jpeg"
                 )
+        elif path == "/Album/Nested":
+            add_response("/Album/Nested/", collection=True)
+            if depth != "0":
+                data = self.state.files["/Album/Nested/nested.txt"]
+                add_response("/Album/Nested/nested.txt",
+                             size=len(data), content_type="text/plain")
         elif path in self.state.files:
             data = self.state.files[path]
             content_type = (
@@ -255,6 +271,10 @@ class Handler(BaseHTTPRequestHandler):
         if self._path().startswith("/ReadOnly/"):
             self.send_error(403, "Read-only WebDAV directory")
             return
+        if (self.headers.get("If-None-Match") == "*"
+                and self._path() in self.state.files):
+            self.send_error(412, "Cannot overwrite existing file")
+            return
         length = int(self.headers.get("Content-Length", "0"))
         data = self.rfile.read(length)
         self.state.files[self._path()] = data
@@ -267,6 +287,9 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         source = self._path()
+        if source.startswith("/PutOnly/"):
+            self.send_error(403, "MOVE blocked, PUT allowed")
+            return
         destination = self.headers.get("Destination", "")
         destination_path = unquote(
             urlparse(destination).path
