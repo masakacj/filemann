@@ -43,7 +43,7 @@ enum WebDAVArchiveError: LocalizedError {
         case .invalidResponse:
             return "WebDAV 返回内容无法解析"
         case .certificateRejected(let host):
-            return "HTTPS 证书校验失败（\(host)）。请在“设置 → 远程 WebDAV → 检查服务器证书”查看原因；如果是自己的 NAS 自签证书，须先从 NAS 管理端核对 SHA-256 指纹，再单独信任该证书。也请检查 HTTPS 域名是否在证书 SAN 中。"
+            return "HTTPS 证书校验失败（\(host)）。如果这是你自己的 NAS，请到“设置 → 远程 WebDAV → 高级”开启“兼容 NAS 自签/无效证书”；也可以检查服务器证书并使用 SHA-256 指纹固定信任。"
         }
     }
 }
