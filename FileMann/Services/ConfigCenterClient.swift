@@ -112,6 +112,9 @@ struct FileMannRemoteConfig: Decodable {
                 ? "/" : url.percentEncodedPath
             settings.webDAVRemoteHTTPS = scheme == "https"
             settings.webDAVRemoteBaseURL = ""
+            if previousRemoteURL != settings.normalizedWebDAVRemoteBaseURL {
+                settings.disableRemoteCertificateCompatibility()
+            }
         } else {
             settings.webDAVLocalHost = host
             settings.webDAVLocalPort = url.port.map(String.init) ?? ""
