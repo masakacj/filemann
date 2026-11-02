@@ -205,6 +205,16 @@ jobs:
           test -d "$APP_PATH/PlugIns/FileMannShare.appex"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/PlugIns/FileMannShare.appex/Info.plist")" = "com.masakacj.filemann.share"
           /usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' "$APP_PATH/PlugIns/FileMannShare.appex/Info.plist" | grep -qx "com.apple.share-services"
+          # Prevent regressions where iOS hides FileMann for a 200+ item
+          # Photos selection before the Share extension even launches.
+          SHARE_PLIST="$APP_PATH/PlugIns/FileMannShare.appex/Info.plist"
+          for key in \
+            NSExtensionActivationSupportsAttachmentsWithMaxCount \
+            NSExtensionActivationSupportsFileWithMaxCount \
+            NSExtensionActivationSupportsImageWithMaxCount \
+            NSExtensionActivationSupportsMovieWithMaxCount; do
+            test "$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:$key" "$SHARE_PLIST")" = "1024"
+          done
           test ! -e "$APP_PATH/_CodeSignature"
           test ! -e "$APP_PATH/PlugIns/FileMannShare.appex/_CodeSignature"
 
@@ -237,6 +247,14 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :UIUserInterfaceStyle' "$APP/Info.plist")" = 'Dark'
           test -d "$APP/PlugIns/FileMannShare.appex"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/PlugIns/FileMannShare.appex/Info.plist")" = "com.masakacj.filemann.share"
+          SHARE_PLIST="$APP/PlugIns/FileMannShare.appex/Info.plist"
+          for key in \
+            NSExtensionActivationSupportsAttachmentsWithMaxCount \
+            NSExtensionActivationSupportsFileWithMaxCount \
+            NSExtensionActivationSupportsImageWithMaxCount \
+            NSExtensionActivationSupportsMovieWithMaxCount; do
+            test "$(/usr/libexec/PlistBuddy -c "Print :NSExtension:NSExtensionAttributes:NSExtensionActivationRule:$key" "$SHARE_PLIST")" = "1024"
+          done
           test ! -e "$APP/_CodeSignature"
           test ! -e "$APP/PlugIns/FileMannShare.appex/_CodeSignature"
           shasum -a 256 "$PWD/build/FileMann-unsigned.ipa"
