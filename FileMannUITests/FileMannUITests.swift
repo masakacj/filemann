@@ -290,17 +290,20 @@ final class FileMannUITests: XCTestCase {
     private func assertMockMediaVisible(
         _ app: XCUIApplication
     ) {
+        // Simulator URLSession networking and thumbnail decoding can be slow
+        // after a cold launch. Check that the real elements arrive rather
+        // than requiring the NAS browser to populate within five seconds.
         XCTAssertTrue(
             app.staticTexts["Album"]
-                .waitForExistence(timeout: 5)
+                .waitForExistence(timeout: 18)
         )
         XCTAssertTrue(
             app.staticTexts["photo.jpg"]
-                .waitForExistence(timeout: 5)
+                .waitForExistence(timeout: 18)
         )
         XCTAssertTrue(
             app.staticTexts["clip.mp4"]
-                .waitForExistence(timeout: 5)
+                .waitForExistence(timeout: 18)
         )
     }
 
@@ -315,7 +318,7 @@ final class FileMannUITests: XCTestCase {
             )
             .firstMatch
         XCTAssertTrue(
-            thumbnail.waitForExistence(timeout: 5)
+            thumbnail.waitForExistence(timeout: 12)
         )
 
         let loaded = NSPredicate(
@@ -326,6 +329,6 @@ final class FileMannUITests: XCTestCase {
             for: loaded,
             evaluatedWith: thumbnail
         )
-        waitForExpectations(timeout: 10)
+        waitForExpectations(timeout: 20)
     }
 }
