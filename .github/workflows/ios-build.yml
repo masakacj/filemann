@@ -132,6 +132,15 @@ jobs:
             -extfile build/mock-webdav/server.ext >/dev/null 2>&1
           openssl verify -CAfile build/mock-webdav/root-cert.pem \
             build/mock-webdav/cert.pem
+
+          # A separate, untrusted self-signed cert is used to verify that
+          # remote HTTPS fails closed unless the exact leaf SHA-256 is pinned.
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+            -keyout build/mock-webdav/untrusted-key.pem \
+            -out build/mock-webdav/untrusted-cert.pem \
+            -days 1 -subj '/CN=localhost' \
+            -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+            >/dev/null 2>&1
           xcrun simctl keychain "$SIM_UDID" add-root-cert \
             "$PWD/build/mock-webdav/root-cert.pem"
 
@@ -141,15 +150,24 @@ jobs:
           python3 Tests/MockWebDAV/mock_webdav.py             --port 8766             --log build/mock-webdav/remote.jsonl             --label remote             --cert build/mock-webdav/cert.pem             --key build/mock-webdav/key.pem             >build/logs/mock-remote.log 2>&1 &
           REMOTE_PID=$!
 
+          python3 Tests/MockWebDAV/mock_webdav.py \
+            --port 8767 --log build/mock-webdav/untrusted.jsonl \
+            --label untrusted \
+            --cert build/mock-webdav/untrusted-cert.pem \
+            --key build/mock-webdav/untrusted-key.pem \
+            >build/logs/mock-untrusted.log 2>&1 &
+          UNTRUSTED_PID=$!
+
           cleanup() {
-            kill "$LOCAL_PID" "$REMOTE_PID" 2>/dev/null || true
+            kill "$LOCAL_PID" "$REMOTE_PID" "$UNTRUSTED_PID" 2>/dev/null || true
             xcrun simctl shutdown "$SIM_UDID" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:8765/__health >/dev/null &&
-               curl -kfsS https://127.0.0.1:8766/__health >/dev/null; then
+               curl -kfsS https://127.0.0.1:8766/__health >/dev/null &&
+               curl -kfsS https://127.0.0.1:8767/__health >/dev/null; then
               break
             fi
             sleep 0.2
@@ -157,6 +175,7 @@ jobs:
 
           curl -fsS http://127.0.0.1:8765/__health
           curl -kfsS https://127.0.0.1:8766/__health
+          curl -kfsS https://127.0.0.1:8767/__health
 
           xcodebuild             -project FileMann.xcodeproj             -scheme FileMann             -configuration Debug             -destination "platform=iOS Simulator,id=$SIM_UDID"             -derivedDataPath "$PWD/build/TestDerivedData"             -resultBundlePath "$PWD/build/test-results/FileMann.xcresult"             test 2>&1 | tee build/logs/xcode-test.log
 
