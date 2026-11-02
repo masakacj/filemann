@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ArchiveView: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
@@ -132,6 +133,21 @@ struct ArchiveView: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
 
+            if viewModel.tasks.contains(where: { $0.state == .completed }) {
+                Button {
+                    viewModel.recheckCompletedArchives()
+                } label: {
+                    Label(
+                        viewModel.isRecheckingArchives
+                            ? "正在核验实际 NAS 路径…"
+                            : "核验已完成文件 / 查看落盘位置",
+                        systemImage: "checkmark.shield"
+                    )
+                }
+                .font(.caption)
+                .disabled(viewModel.isRecheckingArchives || viewModel.isRunning)
+            }
+
             if let verification = viewModel.lastVerification {
                 HStack(spacing: 6) {
                     Image(systemName: verification.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
@@ -237,7 +253,10 @@ struct ArchiveView: View {
 }
 
 private struct ArchiveTaskRow: View {
+    @EnvironmentObject private var viewModel: ArchiveViewModel
     let task: ArchiveTask
+    @State private var isRenaming = false
+    @State private var filenameDraft = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -258,7 +277,7 @@ private struct ArchiveTaskRow: View {
 
                 Spacer()
 
-                Text(task.state.title)
+                Text(task.completionDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -275,6 +294,31 @@ private struct ArchiveTaskRow: View {
                 .foregroundStyle(.secondary)
             }
 
+            if task.isShareStaging == true,
+               [.queued, .paused, .failed, .missingSource].contains(task.state) {
+                Button("修改上传文件名") {
+                    filenameDraft = task.displayName
+                    isRenaming = true
+                }
+                .font(.caption)
+            }
+
+            if let url = task.remoteAbsoluteURL {
+                HStack(alignment: .top) {
+                    Text("NAS：\(url)")
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .lineLimit(3)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = url
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .accessibilityLabel("复制 NAS 实际文件地址")
+                }
+            }
+
             if let error = task.errorMessage, !error.isEmpty {
                 Text(error)
                     .font(.caption)
@@ -288,6 +332,15 @@ private struct ArchiveTaskRow: View {
             }
         }
         .padding(.vertical, 4)
+        .alert("修改归档文件名", isPresented: $isRenaming) {
+            TextField("文件名", text: $filenameDraft)
+            Button("保存") {
+                viewModel.renameQueuedSharedMedia(task, to: filenameDraft)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只修改未来 NAS 文件名，不改变相册原件")
+        }
     }
 
     private var icon: String {
