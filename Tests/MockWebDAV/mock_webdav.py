@@ -180,6 +180,15 @@ class Handler(BaseHTTPRequestHandler):
 </d:response>"""
             )
 
+        if path == "/NotWebDAV":
+            # Some reverse proxies return a 200 SPA/HTML page for
+            # PROPFIND, even though no WebDAV service is available.
+            self._body(
+                b"<html><title>Not WebDAV</title></html>",
+                status=200,
+                content_type="text/html",
+            )
+            return
         if path == "/":
             add_response("/", collection=True)
             if depth != "0":
