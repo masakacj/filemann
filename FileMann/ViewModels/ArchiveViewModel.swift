@@ -12,6 +12,7 @@ final class ArchiveViewModel: ObservableObject {
     @Published var webDAVPassword: String
 
     @Published var isRunning = false
+    @Published var isRecheckingArchives = false
     @Published var isScanningLocation = false
     @Published var isShowingFilePicker = false
     @Published var isShowingFolderPicker = false
@@ -46,6 +47,14 @@ final class ArchiveViewModel: ObservableObject {
         self.password = KeychainStore.loadPassword()
         self.webDAVPassword = KeychainStore.loadWebDAVPassword()
 
+        if tasks.contains(where: {
+            $0.state == .completed && $0.verifiedAt == nil
+        }) {
+            self.lastVerification = nil
+            self.statusMessage =
+                "存在旧版未核实的成功记录。请点击“核验已完成文件”查看实际 NAS 地址。"
+        }
+
         let validTaskIDs = Set(tasks.map(\.id))
         self.duplicateCandidates.removeAll { !validTaskIDs.contains($0.taskID) }
 
@@ -76,7 +85,9 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     var completedCount: Int {
-        tasks.filter { $0.state == .completed }.count
+        tasks.filter {
+            $0.state == .completed && $0.verifiedAt != nil
+        }.count
     }
 
     var unresolvedDuplicateCount: Int {
@@ -485,9 +496,17 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func retry(_ task: ArchiveTask) {
-        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }),
+              tasks[index].state != .completed else { return }
         tasks[index].state = .queued
+        tasks[index].transferredBytes = 0
+        tasks[index].remoteVerifiedPath = nil
+        tasks[index].remoteEndpointURL = nil
+        tasks[index].attemptedRemotePath = nil
+        tasks[index].verifiedAt = nil
+        tasks[index].completionKind = nil
         tasks[index].errorMessage = nil
+        invalidateVerification()
         persistTasks()
     }
 
@@ -498,6 +517,8 @@ final class ArchiveViewModel: ObservableObject {
         // Removing a shared upload should also remove its disposable stage,
         // otherwise the next app activation would re-enqueue the file.
         if task.isShareStaging == true,
+           task.state == .completed,
+           task.verifiedAt != nil,
            let inbox = try? FileMannShareGroup.incomingDirectory(
                 createIfMissing: false
            ),
@@ -514,9 +535,13 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func clearCompleted() {
-        let removedIDs = Set(tasks.filter { $0.state == .completed || $0.state == .skipped }.map(\.id))
+        let removedIDs = Set(tasks.filter {
+            ($0.state == .completed && $0.verifiedAt != nil) ||
+                $0.state == .skipped
+        }.map(\.id))
         tasks.removeAll { removedIDs.contains($0.id) }
         duplicateCandidates.removeAll { removedIDs.contains($0.taskID) }
+        invalidateVerification()
         persistTasks()
         persistDuplicates()
     }
@@ -624,6 +649,11 @@ final class ArchiveViewModel: ObservableObject {
                             failIfExists: uploadMode == .directPut
                         )
 
+                        tasks[index].remoteEndpointURL = service.baseURLString
+                        tasks[index].attemptedRemotePath = finalPath
+                        tasks[index].verifiedAt = nil
+                        tasks[index].completionKind = nil
+
                         try manager.schedule(
                             taskID: taskID,
                             sourceURL: sourceURL,
@@ -721,9 +751,18 @@ final class ArchiveViewModel: ObservableObject {
                 break
 
             case .keepNAS:
+                _ = try await service.verifyPublishedFile(
+                    at: candidate.remotePath,
+                    expectedBytes: candidate.fileSize
+                )
                 tasks[index].state = .completed
                 tasks[index].transferredBytes = tasks[index].fileSize
                 tasks[index].remoteVerifiedPath = candidate.remotePath
+                tasks[index].attemptedRemotePath =
+                    service.desiredRemotePath(for: tasks[index])
+                tasks[index].remoteEndpointURL = service.baseURLString
+                tasks[index].verifiedAt = Date()
+                tasks[index].completionKind = .alreadyOnNAS
                 tasks[index].shouldDeleteSource = true
                 tasks[index].errorMessage =
                     "重复文件：使用 NAS 已有副本，整批校验后删除手机副本"
@@ -737,9 +776,18 @@ final class ArchiveViewModel: ObservableObject {
                     "重复文件：已删除 NAS 副本，仅保留手机文件"
 
             case .keepBoth:
+                _ = try await service.verifyPublishedFile(
+                    at: candidate.remotePath,
+                    expectedBytes: candidate.fileSize
+                )
                 tasks[index].state = .completed
                 tasks[index].transferredBytes = tasks[index].fileSize
                 tasks[index].remoteVerifiedPath = candidate.remotePath
+                tasks[index].attemptedRemotePath =
+                    service.desiredRemotePath(for: tasks[index])
+                tasks[index].remoteEndpointURL = service.baseURLString
+                tasks[index].verifiedAt = Date()
+                tasks[index].completionKind = .alreadyOnNAS
                 tasks[index].shouldDeleteSource = false
                 tasks[index].errorMessage =
                     "重复文件：两边都保留，不重复上传"
@@ -783,7 +831,8 @@ final class ArchiveViewModel: ObservableObject {
             ) { [weak self] note in
                 guard let taskID = note.userInfo?["taskID"] as? UUID,
                       let remotePath = note.userInfo?["remotePath"] as? String,
-                      let remoteSize = note.userInfo?["remoteSize"] as? Int64 else {
+                      let remoteSize = note.userInfo?["remoteSize"] as? Int64,
+                      let endpoint = note.userInfo?["remoteEndpointURL"] as? String else {
                     return
                 }
 
@@ -795,8 +844,13 @@ final class ArchiveViewModel: ObservableObject {
 
                     self.tasks[index].transferredBytes = remoteSize
                     self.tasks[index].remoteVerifiedPath = remotePath
+                    self.tasks[index].remoteEndpointURL = endpoint
+                    self.tasks[index].attemptedRemotePath = remotePath
+                    self.tasks[index].verifiedAt = Date()
+                    self.tasks[index].completionKind = .uploaded
                     self.tasks[index].state = .completed
-                    self.tasks[index].errorMessage = "NAS 已落盘并通过文件大小校验"
+                    self.tasks[index].errorMessage =
+                        "已在实际上传端点的目录列表中确认文件"
                     self.cleanupShareStaging(at: index)
                     self.persistTasks()
                     if self.tasks.contains(where: {
@@ -878,9 +932,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         do {
-            let service = try await makeReachableWebDAVService()
-
-            let verification = await service.verifyManifest(tasks)
+            let verification = await verifyRecordedWebDAVManifest()
             lastVerification = verification
             TaskStore.saveVerification(verification)
 
