@@ -18,6 +18,8 @@ enum WebDAVArchiveError: LocalizedError {
     case archiveDirectoryMissing(String)
     case remoteConflict(String)
     case remoteVerificationFailed
+    case remoteFileNotListed(String)
+    case remoteFileSizeMismatch(path: String, expected: Int64, actual: Int64?)
     case sourceUnavailable
     case sourceChanged
     case invalidResponse
@@ -57,7 +59,11 @@ enum WebDAVArchiveError: LocalizedError {
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
-            return "NAS 文件大小校验失败"
+            return "NAS 目标文件尚未通过实际目录验证，暂不标记成功"
+        case .remoteFileNotListed(let location):
+            return "NAS 目录列表中没有上传文件：\(location)。请检查实际 WebDAV 地址与共享目录映射；已保留归档任务。"
+        case .remoteFileSizeMismatch(let path, let expected, let actual):
+            return "NAS 目录中发现 \(path)，但大小不符（期望 \(expected) 字节，实际 \(actual.map(String.init) ?? "未知") 字节），没有确认成功。"
         case .sourceUnavailable:
             return "无法访问源文件"
         case .sourceChanged:
@@ -667,9 +673,10 @@ final class WebDAVArchiveService {
         expectedBytes: Int64,
         uploadMode: WebDAVUploadMode = .atomicMove
     ) async throws -> ArchiveResult {
-        guard await remoteFileSize(atPath: partialPath) == expectedBytes else {
-            throw WebDAVArchiveError.remoteVerificationFailed
-        }
+        _ = try await verifyPublishedFile(
+            at: partialPath,
+            expectedBytes: expectedBytes
+        )
 
         if uploadMode == .directPut {
             guard partialPath == finalPath else {
@@ -706,13 +713,50 @@ final class WebDAVArchiveService {
         }
         try validate(response, accepted: [201, 204])
 
-        guard await remoteFileSize(atPath: finalPath) == expectedBytes else {
-            throw WebDAVArchiveError.remoteVerificationFailed
+        return try await verifyPublishedFile(
+            at: finalPath,
+            expectedBytes: expectedBytes
+        )
+    }
+
+    /// Verify visibility in the exact uploaded endpoint's *parent listing*.
+    /// HEAD 200 and Content-Length alone are not evidence: a reverse proxy
+    /// may return a fallback page or a stale object from a different share.
+    /// This is intentionally read-only and never deletes or moves NAS data.
+    func verifyPublishedFile(
+        at path: String,
+        expectedBytes: Int64
+    ) async throws -> ArchiveResult {
+        let file = normalize(path)
+        guard !file.isEmpty else {
+            throw WebDAVArchiveError.invalidResponse
+        }
+        let parent = (file as NSString).deletingLastPathComponent
+        let listing = try await propfind(path: parent, depth: "1")
+        let resources = try WebDAVMultiStatusParser(data: listing).parse()
+        guard let actual = resources.first(where: { entry in
+            guard !entry.isCollection,
+                  let relative = relativePath(fromHref: entry.href) else {
+                return false
+            }
+            return relative == file &&
+                isImmediateChild(relative, of: parent)
+        }) else {
+            throw WebDAVArchiveError.remoteFileNotListed(
+                remoteURL(for: file).absoluteString
+            )
+        }
+        guard actual.contentLength == expectedBytes else {
+            throw WebDAVArchiveError.remoteFileSizeMismatch(
+                path: remoteURL(for: file).absoluteString,
+                expected: expectedBytes,
+                actual: actual.contentLength
+            )
         }
 
         return ArchiveResult(
             remoteSize: expectedBytes,
-            remotePath: normalize(finalPath)
+            remotePath: file
         )
     }
 
@@ -769,18 +813,22 @@ final class WebDAVArchiveService {
         let expectedBytes = expected.reduce(Int64(0)) {
             $0 + $1.fileSize
         }
-
         var verifiedCount = 0
         var verifiedBytes: Int64 = 0
 
         for task in expected {
-            let path = task.remoteVerifiedPath
-                ?? desiredRemotePath(for: task)
-            if let size = await remoteFileSize(atPath: path),
-               size == task.fileSize {
-                verifiedCount += 1
-                verifiedBytes += size
+            guard task.state == .completed,
+                  task.remoteEndpointURL == baseURLString,
+                  let path = task.remoteVerifiedPath,
+                  task.verifiedAt != nil,
+                  let file = try? await verifyPublishedFile(
+                    at: path,
+                    expectedBytes: task.fileSize
+                  ) else {
+                continue
             }
+            verifiedCount += 1
+            verifiedBytes += file.remoteSize
         }
 
         return BatchVerification(
