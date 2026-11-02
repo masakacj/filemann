@@ -97,9 +97,14 @@ targets:
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
           NSExtensionAttributes:
             NSExtensionActivationRule:
-              NSExtensionActivationSupportsFileWithMaxCount: 25
-              NSExtensionActivationSupportsImageWithMaxCount: 25
-              NSExtensionActivationSupportsMovieWithMaxCount: 25
+              # Photos share sheets filter out the extension before launch
+              # when the selected count exceeds any declared maximum.
+              # Large selections (200+ mixed photos/videos) need a generous
+              # attachment and per-media bound; import itself is incremental.
+              NSExtensionActivationSupportsAttachmentsWithMaxCount: 1024
+              NSExtensionActivationSupportsFileWithMaxCount: 1024
+              NSExtensionActivationSupportsImageWithMaxCount: 1024
+              NSExtensionActivationSupportsMovieWithMaxCount: 1024
 
   FileMannTests:
     type: bundle.unit-test
