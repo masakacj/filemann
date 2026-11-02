@@ -147,12 +147,19 @@ struct SMBSettings: Codable, Equatable {
 
     static func isPrivateLANHost(_ value: String) -> Bool {
         let host = value.lowercased()
-        if host == "localhost" || host.hasSuffix(".local") ||
-            host.hasPrefix("127.") || host.hasPrefix("10.") ||
-            host.hasPrefix("192.168.") { return true }
-        let octets = host.split(separator: ".").compactMap { Int($0) }
-        return octets.count == 4 && octets[0] == 172 &&
-            (16...31).contains(octets[1])
+        if host == "localhost" || host.hasSuffix(".local") {
+            return true
+        }
+        let parts = host.split(separator: ".")
+        guard parts.count == 4,
+              let values = parts.map({ Int($0) }) as? [Int],
+              values.allSatisfy({ (0...255).contains($0) }) else {
+            return false
+        }
+        return values[0] == 10 ||
+            values[0] == 127 ||
+            (values[0] == 192 && values[1] == 168) ||
+            (values[0] == 172 && (16...31).contains(values[1]))
     }
 
     var activeRemoteDirectory: String {
