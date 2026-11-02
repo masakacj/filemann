@@ -58,6 +58,19 @@ final class ArchiveViewModel: ObservableObject {
         let validTaskIDs = Set(tasks.map(\.id))
         self.duplicateCandidates.removeAll { !validTaskIDs.contains($0.taskID) }
 
+        // Existing duplicates were already treated as completed without
+        // uploading a new file. Keep that distinction across upgrades.
+        let reusedTaskIDs = Set(duplicateCandidates.filter {
+            $0.decision == .keepNAS || $0.decision == .keepBoth
+        }.map(\.taskID))
+        for index in tasks.indices {
+            if tasks[index].state == .completed,
+               tasks[index].completionKind == nil,
+               reusedTaskIDs.contains(tasks[index].id) {
+                tasks[index].completionKind = .alreadyOnNAS
+            }
+        }
+
         installWebDAVObservers()
 
         Task { [weak self] in
