@@ -295,7 +295,7 @@ private struct ArchiveTaskRow: View {
             }
 
             if task.isShareStaging == true,
-               [.queued, .paused, .failed, .missingSource].contains(task.state) {
+               [.queued, .failed, .missingSource].contains(task.state) {
                 Button("修改上传文件名") {
                     filenameDraft = task.displayName
                     isRenaming = true
