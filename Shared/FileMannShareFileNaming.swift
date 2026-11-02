@@ -89,6 +89,22 @@ enum FileMannShareFileNaming {
         return value
     }
 
+    /// Preserve the source filename byte-for-byte except an explicit numeric
+    /// suffix before the original extension. Used only when names collide,
+    /// and never for otherwise unique media files.
+    static func addingDuplicateSuffix(
+        to original: String,
+        number: Int
+    ) -> String {
+        precondition(number >= 2)
+        let extensionName = (original as NSString).pathExtension
+        guard !extensionName.isEmpty else {
+            return original + " (\(number))"
+        }
+        let stem = (original as NSString).deletingPathExtension
+        return stem + " (\(number))." + extensionName
+    }
+
     /// The UUID prefix is used only inside the staging inbox to allow two
     /// photos with the same filename to coexist. It is removed at import.
     static func stage(
