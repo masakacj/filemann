@@ -340,18 +340,18 @@ final class ArchiveViewModel: ObservableObject {
                 // A private config-center record may still point at an old
                 // NAS IP. Never silently replace a manually corrected LAN
                 // endpoint at launch; require an explicit sync to migrate.
-                if silent,
-                   let current = URL(
-                        string: settings.normalizedWebDAVBaseURL
-                   )?.host,
-                   let incoming = URL(
-                        string: updated.normalizedWebDAVBaseURL
-                   )?.host,
-                   current != incoming {
-                    configCenterStatus =
-                        "配置中心 NAS 地址与本机不同；已保留当前地址。" +
-                        "请先修正服务端记录，再手动同步。"
-                    return
+                if silent {
+                    let current = settings.normalizedWebDAVBaseURL
+                    let incoming = updated.normalizedWebDAVBaseURL
+                    // Host-only comparison is insufficient: an obsolete
+                    // WebDAV port or share path can also cause PUT 403.
+                    if !current.isEmpty && !incoming.isEmpty &&
+                        current != incoming {
+                        configCenterStatus =
+                            "配置中心 WebDAV 端点与本机不同（地址/端口/路径），" +
+                            "保留本机设置；请在配置中心核对后手动同步。"
+                        return
+                    }
                 }
 
                 try KeychainStore.saveConfigCenterPassword(fixedPassword)
