@@ -141,14 +141,18 @@ struct SMBSettings: Codable, Equatable {
     static func isPrivateLANHTTPURL(_ value: String) -> Bool {
         guard let url = URLComponents(string: value),
               url.scheme?.lowercased() == "http",
-              let host = url.host?.lowercased() else { return false }
+              let host = url.host else { return false }
+        return isPrivateLANHost(host)
+    }
+
+    static func isPrivateLANHost(_ value: String) -> Bool {
+        let host = value.lowercased()
         if host == "localhost" || host.hasSuffix(".local") ||
             host.hasPrefix("127.") || host.hasPrefix("10.") ||
             host.hasPrefix("192.168.") { return true }
         let octets = host.split(separator: ".").compactMap { Int($0) }
-        if octets.count == 4, octets[0] == 172,
-           (16...31).contains(octets[1]) { return true }
-        return false
+        return octets.count == 4 && octets[0] == 172 &&
+            (16...31).contains(octets[1])
     }
 
     var activeRemoteDirectory: String {
@@ -189,7 +193,8 @@ struct SMBSettings: Codable, Equatable {
         )
 
         if normalized == normalizedWebDAVBaseURL {
-            return webDAVLocalAllowInvalidCertificate
+            return webDAVLocalAllowInvalidCertificate &&
+                Self.isPrivateLANHost(URL(string: normalized)?.host ?? "")
         }
 
         if normalized == normalizedWebDAVRemoteBaseURL {
@@ -209,7 +214,8 @@ struct SMBSettings: Codable, Equatable {
             host: host,
             port: port
         ) {
-            return webDAVLocalAllowInvalidCertificate
+            return webDAVLocalAllowInvalidCertificate &&
+                Self.isPrivateLANHost(host)
         }
 
         if Self.endpointMatches(
