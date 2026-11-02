@@ -1,6 +1,13 @@
 import Foundation
 import UniformTypeIdentifiers
 
+// Atomic rename is preferable, but some NAS WebDAV gateways permit PUT
+// while rejecting MOVE. Direct mode is only chosen after a real write probe.
+enum WebDAVUploadMode: String, Codable, Sendable {
+    case atomicMove
+    case directPut
+}
+
 enum WebDAVArchiveError: LocalizedError {
     case invalidBaseURL
     case noReachableEndpoint
@@ -86,6 +93,7 @@ final class WebDAVArchiveService {
     private let sessionDelegate: WebDAVSessionDelegate
     private let session: URLSession
     private let baseURL: URL
+    private var cachedRemoteInventory: [RemoteFileInfo]?
 
     var baseURLString: String {
         baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -308,17 +316,20 @@ final class WebDAVArchiveService {
     }
 
     func testConnection() async throws {
-        // Check the exact directory before ever attempting to create it.
-        // A stale SMB path must not lead to MKCOL attempts on the NAS root.
-        let directory = settings.normalizedWebDAVDirectory
-        try await verifyWritableDirectory(at: directory)
+        _ = try await preferredUploadMode()
     }
 
-    /// Side-effect-limited probe for an *existing* WebDAV folder. Used both
+    func preferredUploadMode() async throws -> WebDAVUploadMode {
+        try await verifyWritableDirectory(
+            at: settings.normalizedWebDAVDirectory
+        )
+    }
+
+        /// Side-effect-limited probe for an *existing* WebDAV folder. Used both
     /// by the directory picker and by transfer preflight. On success, the
     /// only remote mutations are a unique temporary file's PUT/MOVE/DELETE.
     /// The original NAS media and iPhone media are never changed.
-    func verifyWritableDirectory(at path: String) async throws {
+    func verifyWritableDirectory(at path: String) async throws -> WebDAVUploadMode {
         let directory = normalize(path)
         let shareRoot = baseURL.path
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -348,40 +359,66 @@ final class WebDAVArchiveService {
                 path: url.path
             )
         }
-        try await verifyWriteOperations(in: directory)
+        return try await verifyWriteOperations(in: directory)
     }
 
     // The connection test must check write/rename/delete permissions, not
     // merely whether a read-only NAS share can answer PROPFIND.
     // Only disposable, UUID-named test files are touched.
-    private func verifyWriteOperations(in directory: String) async throws {
+    private func verifyWriteOperations(
+        in directory: String
+    ) async throws -> WebDAVUploadMode {
         let name = "filemann-webdav-check-" + UUID().uuidString.lowercased()
         let temporaryPath = join(directory, name + ".tmp")
         let renamedPath = join(directory, name + ".verified")
+        let sample = Data("FileMann WebDAV write check".utf8)
 
         do {
             try await performWriteCheck(
                 method: "PUT",
                 path: temporaryPath,
-                body: Data("FileMann WebDAV write check".utf8),
+                body: sample,
                 accepted: [200, 201, 204],
                 action: "写入测试文件"
             )
-            try await performWriteCheck(
-                method: "MOVE",
-                path: temporaryPath,
-                destinationPath: renamedPath,
-                accepted: [201, 204],
-                action: "重命名测试文件"
-            )
-            try await performWriteCheck(
+            guard await remoteFileSize(atPath: temporaryPath)
+                    == Int64(sample.count) else {
+                throw WebDAVArchiveError.remoteVerificationFailed
+            }
+
+            do {
+                try await performWriteCheck(
+                    method: "MOVE",
+                    path: temporaryPath,
+                    destinationPath: renamedPath,
+                    accepted: [201, 204],
+                    action: "重命名测试文件"
+                )
+            } catch {
+                // Many gateways, including otherwise writable WebDAV
+                // servers, block MOVE. A direct PUT remains usable.
+                guard Self.isUnsupportedMOVE(error) else {
+                    throw error
+                }
+                try? await performWriteCheck(
+                    method: "DELETE",
+                    path: temporaryPath,
+                    accepted: [200, 202, 204, 404],
+                    action: "清理测试文件"
+                )
+                return .directPut
+            }
+
+            // DELETE permission is not required to upload via PUT/MOVE.
+            // A failed cleanup must not disable otherwise valid uploads.
+            try? await performWriteCheck(
                 method: "DELETE",
                 path: renamedPath,
-                accepted: [200, 202, 204],
-                action: "删除测试文件"
+                accepted: [200, 202, 204, 404],
+                action: "清理测试文件"
             )
+            return .atomicMove
         } catch {
-            // Best-effort cleanup, without masking the original failure.
             try? await performWriteCheck(
                 method: "DELETE",
                 path: temporaryPath,
@@ -396,6 +433,16 @@ final class WebDAVArchiveService {
             )
             throw error
         }
+    }
+
+    private static func isUnsupportedMOVE(_ error: Error) -> Bool {
+        if case WebDAVArchiveError.forbidden(_, _) = error {
+            return true
+        }
+        if case WebDAVArchiveError.unexpectedStatus(let code) = error {
+            return code == 405 || code == 501
+        }
+        return false
     }
 
     private func performWriteCheck(
@@ -596,7 +643,10 @@ final class WebDAVArchiveService {
         try await ensureDirectory(parent)
     }
 
-    func makeUploadRequest(path: String) throws -> URLRequest {
+    func makeUploadRequest(
+        path: String,
+        failIfExists: Bool = false
+    ) throws -> URLRequest {
         var request = URLRequest(url: remoteURL(for: path))
         request.httpMethod = "PUT"
         request.timeoutInterval = 60 * 60 * 24
@@ -604,6 +654,9 @@ final class WebDAVArchiveService {
             "application/octet-stream",
             forHTTPHeaderField: "Content-Type"
         )
+        if failIfExists {
+            request.setValue("*", forHTTPHeaderField: "If-None-Match")
+        }
         applyAuthorization(to: &request)
         return request
     }
@@ -611,10 +664,21 @@ final class WebDAVArchiveService {
     func finalizeBackgroundUpload(
         partialPath: String,
         finalPath: String,
-        expectedBytes: Int64
+        expectedBytes: Int64,
+        uploadMode: WebDAVUploadMode = .atomicMove
     ) async throws -> ArchiveResult {
         guard await remoteFileSize(atPath: partialPath) == expectedBytes else {
             throw WebDAVArchiveError.remoteVerificationFailed
+        }
+
+        if uploadMode == .directPut {
+            guard partialPath == finalPath else {
+                throw WebDAVArchiveError.invalidResponse
+            }
+            return ArchiveResult(
+                remoteSize: expectedBytes,
+                remotePath: normalize(finalPath)
+            )
         }
 
         if await remoteFileSize(atPath: finalPath) != nil {
@@ -741,6 +805,7 @@ final class WebDAVArchiveService {
                 http.statusCode == 404 else {
             throw WebDAVArchiveError.unexpectedStatus(http.statusCode)
         }
+        cachedRemoteInventory = nil
     }
 
     func deleteSourceFile(at url: URL) throws {
@@ -812,25 +877,56 @@ final class WebDAVArchiveService {
     }
 
     private func remoteInventory() async throws -> [RemoteFileInfo] {
-        let root = settings.normalizedWebDAVDirectory
-        let data = try await propfind(path: root, depth: "infinity")
-        let values = try WebDAVMultiStatusParser(data: data).parse()
-
-        return values.compactMap { item in
-            guard !item.isCollection,
-                  let size = item.contentLength,
-                  let relative = relativePath(fromHref: item.href),
-                  !relative.hasSuffix(".filemann-partial"),
-                  !relative.contains(".filemann-") else {
-                return nil
-            }
-
-            return RemoteFileInfo(
-                path: relative,
-                name: (relative as NSString).lastPathComponent,
-                size: size
-            )
+        if let cachedRemoteInventory {
+            return cachedRemoteInventory
         }
+
+        // QNAP / Apache WebDAV may reject Depth: infinity (HTTP 403)
+        // even when Depth: 0 and Depth: 1 both work. Walk one directory
+        // at a time and reuse the inventory across the batch.
+        let root = settings.normalizedWebDAVDirectory
+        var pending = [root]
+        var visited = Set<String>()
+        var files: [RemoteFileInfo] = []
+
+        while let directory = pending.popLast() {
+            try Task.checkCancellation()
+            guard visited.insert(directory).inserted else { continue }
+
+            let data: Data
+            do {
+                data = try await propfind(path: directory, depth: "1")
+            } catch WebDAVArchiveError.unexpectedStatus(let status)
+                where (status == 403 || status == 404) && directory != root {
+                // A folder can be hidden from this account while sibling
+                // folders remain writable. Do not fail the entire upload.
+                continue
+            }
+            let entries = try WebDAVMultiStatusParser(data: data).parse()
+
+            for item in entries {
+                guard let relative = relativePath(fromHref: item.href),
+                      relative != directory,
+                      isImmediateChild(relative, of: directory) else {
+                    continue
+                }
+
+                if item.isCollection {
+                    pending.append(relative)
+                } else if let size = item.contentLength,
+                          !relative.hasSuffix(".filemann-partial"),
+                          !relative.contains(".filemann-") {
+                    files.append(RemoteFileInfo(
+                        path: relative,
+                        name: (relative as NSString).lastPathComponent,
+                        size: size
+                    ))
+                }
+            }
+        }
+
+        cachedRemoteInventory = files
+        return files
     }
 
     private func exactCompare(
