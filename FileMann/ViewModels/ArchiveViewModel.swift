@@ -302,9 +302,9 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func saveSettings() {
+        settings.transport = .webDAV
         TaskStore.saveSettings(settings)
         do {
-            try KeychainStore.savePassword(password)
             try KeychainStore.saveWebDAVPassword(webDAVPassword)
             statusMessage = "归档设置已保存"
         } catch {
@@ -336,15 +336,29 @@ final class ArchiveViewModel: ObservableObject {
                     return
                 }
                 let updated = try remote.applying(to: settings)
+
+                // A private config-center record may still point at an old
+                // NAS IP. Never silently replace a manually corrected LAN
+                // endpoint at launch; require an explicit sync to migrate.
+                if silent,
+                   let current = URL(
+                        string: settings.normalizedWebDAVBaseURL
+                   )?.host,
+                   let incoming = URL(
+                        string: updated.normalizedWebDAVBaseURL
+                   )?.host,
+                   current != incoming {
+                    configCenterStatus =
+                        "配置中心 NAS 地址与本机不同；已保留当前地址。" +
+                        "请先修正服务端记录，再手动同步。"
+                    return
+                }
+
                 try KeychainStore.saveConfigCenterPassword(fixedPassword)
                 try KeychainStore.saveWebDAVPassword(
                     remote.webdav?.password ?? webDAVPassword
                 )
-                try KeychainStore.savePassword(
-                    remote.smb?.password ?? password
-                )
                 webDAVPassword = remote.webdav?.password ?? webDAVPassword
-                password = remote.smb?.password ?? password
                 settings = updated
                 TaskStore.saveSettings(updated)
                 var missing: [String] = []
@@ -359,8 +373,8 @@ final class ArchiveViewModel: ObservableObject {
                     missing.append("NAS 账号凭据")
                 }
                 configCenterStatus = missing.isEmpty
-                    ? "配置同步完成，内外网已就绪；离线沿用上次配置"
-                    : "已同步已有配置；服务端待补齐：" +
+                    ? "WebDAV 配置已读取；请运行“测试连接与写入权限”完成验收"
+                    : "已同步 WebDAV 配置；服务端待补齐：" +
                         missing.joined(separator: "、")
             } catch {
                 configCenterStatus =
@@ -370,54 +384,29 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func chooseRemoteDirectory(_ path: String) {
-        switch settings.transport {
-        case .webDAV:
-            settings.webDAVRemoteDirectory = path
-        case .smb:
-            settings.remoteDirectory = path
-        }
+        settings.webDAVRemoteDirectory = path
         saveSettings()
     }
 
     func loadRemoteDirectories(at path: String) async throws -> [SMBDirectoryEntry] {
-        switch settings.transport {
-        case .webDAV:
-            let service = try await makeReachableWebDAVService()
-            return try await service.listDirectories(at: path)
-        case .smb:
-            let service = try SMBArchiveService(settings: settings, password: password)
-            return try await service.listDirectories(at: path)
-        }
+        let service = try await makeReachableWebDAVService()
+        return try await service.listDirectories(at: path)
     }
 
     func testConnection() {
         connectionTestMessage = "连接中…"
         Task {
             do {
-                switch settings.transport {
-                case .webDAV:
-                    let service = try await makeReachableWebDAVService()
-                    try await service.testConnection()
-                case .smb:
-                    let service = try SMBArchiveService(
-                        settings: settings,
-                        password: password
-                    )
-                    try await service.testConnection()
-                }
-                if settings.transport == .webDAV,
-                   let activeWebDAVEndpoint {
-                    if settings.hasWebDAVArchiveDirectory {
-                        connectionTestMessage = "连接成功（\(activeWebDAVEndpoint)）"
-                    } else {
-                        connectionTestMessage =
-                            "连接成功（\(activeWebDAVEndpoint)）；请继续选择 QNAP 共享文件夹作为归档目录"
-                    }
-                } else {
-                    connectionTestMessage = "连接成功"
-                }
+                let service = try await makeReachableWebDAVService()
+                try await service.testConnection()
+                connectionTestMessage =
+                    "WebDAV 写入/重命名/删除测试成功（" +
+                    (activeWebDAVEndpoint ?? "NAS") + "）"
             } catch {
-                connectionTestMessage = "连接失败：\(error.localizedDescription)"
+                connectionTestMessage =
+                    "WebDAV 连接或写入测试失败（" +
+                    (activeWebDAVEndpoint ?? "NAS") + "）：" +
+                    error.localizedDescription
             }
         }
     }
@@ -442,45 +431,10 @@ final class ArchiveViewModel: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
-
-        if settings.transport == .webDAV {
-            startWebDAV()
-            return
-        }
-
-        guard settings.isValid else {
-            statusMessage = "请先配置 SMB 服务器和共享名"
-            isShowingSettings = true
-            return
-        }
-
-        if unresolvedDuplicateCount > 0 {
-            isShowingDuplicateReview = true
-            statusMessage = "请先处理 \(unresolvedDuplicateCount) 个重复文件"
-            return
-        }
-
-        saveSettings()
-
-        for index in tasks.indices {
-            if tasks[index].state == .failed || tasks[index].state == .paused || tasks[index].state == .missingSource {
-                tasks[index].state = .queued
-                tasks[index].errorMessage = nil
-            }
-        }
-        persistTasks()
-
-        isRunning = true
-        UIApplication.shared.isIdleTimerDisabled = true
-        beginBackgroundTask()
-
-        speedSampleDate = Date()
-        speedSampleBytes = transferredBytes
-        bytesPerSecond = 0
-
-        worker = Task { [weak self] in
-            await self?.runQueue()
-        }
+        // No SMB fallback: all new and restored tasks use the system-backed
+        // WebDAV upload manager for local or remote transfer.
+        settings.transport = .webDAV
+        startWebDAV()
     }
 
     func pause() {
@@ -589,7 +543,10 @@ final class ArchiveViewModel: ObservableObject {
         Task {
             do {
                 let service = try await makeReachableWebDAVService()
-                try await service.connectAndPrepare()
+                // Listing a WebDAV folder does not prove PUT/MOVE/DELETE
+                // permissions. Verify real archive writes before iOS stages
+                // an entire video for background upload.
+                try await service.testConnection()
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
                 if foundNewDuplicates || unresolvedDuplicateCount > 0 {
@@ -1212,7 +1169,10 @@ final class ArchiveViewModel: ObservableObject {
             password: webDAVPassword,
             baseURLString: resolved
         )
-        activeWebDAVEndpoint = service.endpointLabel
+        let endpoint = URL(string: service.baseURLString)
+        let port = endpoint?.port.map { ":\($0)" } ?? ""
+        activeWebDAVEndpoint =
+            "\(service.endpointLabel) · \(endpoint?.host ?? "NAS")\(port)"
         return service
     }
 
