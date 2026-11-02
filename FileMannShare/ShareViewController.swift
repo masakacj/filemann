@@ -155,11 +155,14 @@ final class ShareViewController: UIViewController {
 
     private enum ShareError: LocalizedError {
         case allFailed(String)
+        case providerFailed
 
         var errorDescription: String? {
             switch self {
             case .allFailed(let message):
                 return message
+            case .providerFailed:
+                return "分享来源没有返回可读取的媒体文件"
             }
         }
     }
