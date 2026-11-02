@@ -973,7 +973,7 @@ private struct WebDAVEndpointEditor: View {
     }
 
     private var remoteCertificateSection: some View {
-        Section("远程 HTTPS 证书") {
+        Section {
             Button {
                 inspectRemoteCertificate()
             } label: {
@@ -1058,6 +1058,8 @@ private struct WebDAVEndpointEditor: View {
                     Text("撤销证书信任")
                 }
             }
+        } header: {
+            Text("远程 HTTPS 证书")
         } footer: {
             Text(
                 "只对当前地址和端口保存证书指纹，不会跳过其他服务器的验证。"
