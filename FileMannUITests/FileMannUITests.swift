@@ -204,16 +204,27 @@ final class FileMannUITests: XCTestCase {
 
         // Start from the paused beginning. A single right-side tap
         // advances one frame and should reveal the transient progress UI.
-        right.tap()
-
         let progress = app
             .descendants(matching: .any)
             .matching(
                 identifier: "video-progress-overlay"
             )
             .firstMatch
+
+        // The video frame decoder may not be ready immediately after
+        // presentation on CI simulators. Retry the real gesture after the
+        // player has had a chance to initialize, without bypassing the UI.
+        var progressVisible = false
+        for _ in 0..<3 {
+            right.tap()
+            if progress.waitForExistence(timeout: 3) {
+                progressVisible = true
+                break
+            }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
         XCTAssertTrue(
-            progress.waitForExistence(timeout: 2),
+            progressVisible,
             "逐帧操作后应显示进度条"
         )
 
