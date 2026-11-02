@@ -553,7 +553,7 @@ final class ArchiveViewModel: ObservableObject {
         guard !isRunning,
               let index = tasks.firstIndex(where: { $0.id == task.id }),
               tasks[index].isShareStaging == true,
-              [.queued, .paused, .failed, .missingSource]
+              [.queued, .failed, .missingSource]
                   .contains(tasks[index].state) else {
             statusMessage = "只能修改尚未归档的相册分享文件"
             return
