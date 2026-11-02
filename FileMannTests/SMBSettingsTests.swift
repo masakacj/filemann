@@ -72,6 +72,109 @@ final class SMBSettingsTests: XCTestCase {
         )
     }
 
+    func testLegacySMBSettingDecodesAsWebDAVOnly() throws {
+        let saved = Data("""
+        {"transport":"smb","host":"192.168.233.233",
+         "webDAVLocalHost":"192.168.233.233",
+         "webDAVLocalPort":"8900","webDAVLocalHTTPS":false}
+        """.utf8)
+        let settings = try JSONDecoder().decode(SMBSettings.self, from: saved)
+        XCTAssertEqual(settings.transport, .webDAV)
+        XCTAssertTrue(settings.isValid)
+    }
+
+    func testPublicHTTPIsNeverUsedForWebDAV() {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "nas.example.org"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVRemoteHost = "remote.example.org"
+        settings.webDAVRemoteHTTPS = false
+        XCTAssertTrue(settings.webDAVCandidateBaseURLs.isEmpty)
+
+        settings.webDAVRemoteHTTPS = true
+        XCTAssertEqual(
+            settings.webDAVCandidateBaseURLs,
+            ["https://remote.example.org"]
+        )
+        XCTAssertTrue(SMBSettings.isPrivateLANHTTPURL(
+            "http://192.168.233.233:8900"
+        ))
+        XCTAssertFalse(SMBSettings.isPrivateLANHTTPURL(
+            "http://public.example.org:8900"
+        ))
+    }
+
+    func testWANNeverPermitsInvalidCertificates() {
+        var settings = SMBSettings()
+        settings.webDAVRemoteHost = "remote.example.org"
+        settings.webDAVRemoteHTTPS = true
+        settings.webDAVRemoteAllowInvalidCertificate = true
+        XCTAssertFalse(settings.webDAVAllowsInvalidCertificate(
+            for: settings.normalizedWebDAVRemoteBaseURL
+        ))
+    }
+
+    func testServerSMBTransportCannotReenableLegacyProtocol() throws {
+        let data = Data("""
+        {"transfer":{"transport":"smb"},
+         "webdav":{"localURL":"http://192.168.233.233:8900/"}}
+        """.utf8)
+        let config = try JSONDecoder().decode(
+            FileMannRemoteConfig.self, from: data
+        )
+        let result = try config.applying(to: SMBSettings())
+        XCTAssertEqual(result.transport, .webDAV)
+    }
+
+    func testWebDAVRejectsDuplicatedSharedDirectoryPrefix() async throws {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVLocalPath = "/storage"
+        settings.webDAVRemoteDirectory = "storage/Documentsf/Apps"
+        let service = try WebDAVArchiveService(
+            settings: settings, password: "filemann-pass"
+        )
+        do {
+            try await service.connectAndPrepare()
+            XCTFail("The WebDAV share must not be repeated in the path")
+        } catch WebDAVArchiveError.duplicateArchiveDirectory {
+            // Identifies the wrong path before a write is attempted.
+        }
+    }
+
+    func testWritableLeafWithoutParentBrowsePermission() async throws {
+        let service = try mockWebDAVService(
+            directory: "ParentDenied/Upload"
+        )
+        try await service.testConnection()
+    }
+
+    func testWebDAVShareRootWithValidAuthIsWritable() async throws {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalPath = "/Album"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVUsername = "filemann"
+        let service = try WebDAVArchiveService(
+            settings: settings, password: "filemann-pass"
+        )
+        XCTAssertTrue(settings.hasWebDAVArchiveDirectory)
+        try await service.testConnection()
+    }
+
+    func testWebDAVBareNASRootIsNotArchiveDestination() async throws {
+        let service = try mockWebDAVService(directory: "")
+        do {
+            try await service.testConnection()
+            XCTFail("Unsafe NAS root must not accept uploads")
+        } catch WebDAVArchiveError.missingArchiveDestination {
+            // The NAS site root is read-only until a share is selected.
+        }
+    }
+
     func testWriteCheckSucceedsForWritableDirectory() async throws {
         let service = try mockWebDAVService(directory: "Album")
         try await service.testConnection()
@@ -108,7 +211,7 @@ final class SMBSettingsTests: XCTestCase {
         let config = try JSONDecoder().decode(
             FileMannRemoteConfig.self,
             from: Data("""
-            {"webdav":{"localURL":"http://192.168.233.201:8900"},
+            {"webdav":{"localURL":"http://192.168.233.233:8900"},
              "transfer":{"transport":"webDAV","deleteAfterArchive":false}}
             """.utf8)
         )
@@ -118,7 +221,7 @@ final class SMBSettingsTests: XCTestCase {
         let result = try config.applying(to: existing)
         XCTAssertEqual(
             result.normalizedWebDAVBaseURL,
-            "http://192.168.233.201:8900"
+            "http://192.168.233.233:8900"
         )
         XCTAssertEqual(result.webDAVUsername, "preserve-user")
         XCTAssertEqual(result.normalizedWebDAVDirectory, "Shared/MyFiles")
