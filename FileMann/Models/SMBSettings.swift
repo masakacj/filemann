@@ -1,5 +1,7 @@
 import Foundation
 
+// Keep .smb only for decoding historic settings; the UI and archive
+// scheduler expose WebDAV exclusively.
 enum ArchiveTransport: String, Codable, CaseIterable, Identifiable {
     case webDAV
     case smb
@@ -83,7 +85,13 @@ struct SMBSettings: Codable, Equatable {
     }
 
     var hasWebDAVArchiveDirectory: Bool {
-        !normalizedWebDAVDirectory.isEmpty
+        if !normalizedWebDAVDirectory.isEmpty { return true }
+        // Share-root URLs already point at an upload location; the bare NAS
+        // website root "/" does not.
+        return webDAVCandidateBaseURLs.contains { candidate in
+            let components = URLComponents(string: candidate)
+            return !(components?.path ?? "").split(separator: "/").isEmpty
+        }
     }
 
     var normalizedWebDAVBaseURL: String {
@@ -112,36 +120,54 @@ struct SMBSettings: Codable, Equatable {
 
     var webDAVCandidateBaseURLs: [String] {
         var values: [String] = []
-
-        for value in [
-            normalizedWebDAVBaseURL,
-            normalizedWebDAVRemoteBaseURL
-        ] where !value.isEmpty && !values.contains(value) {
-            values.append(value)
+        let local = normalizedWebDAVBaseURL
+        if Self.isValidWebDAVURL(local),
+           (URL(string: local)?.scheme == "https" ||
+            Self.isPrivateLANHTTPURL(local)) {
+            values.append(local)
         }
 
+        // Never transmit NAS credentials or media using HTTP to a WAN
+        // address. Local HTTP is allowed only for verified private hosts.
+        let remote = normalizedWebDAVRemoteBaseURL
+        if Self.isValidWebDAVURL(remote),
+           URL(string: remote)?.scheme == "https",
+           !values.contains(remote) {
+            values.append(remote)
+        }
         return values
     }
 
-    var activeRemoteDirectory: String {
-        switch transport {
-        case .webDAV:
-            return normalizedWebDAVDirectory
-        case .smb:
-            return normalizedDirectory
+    static func isPrivateLANHTTPURL(_ value: String) -> Bool {
+        guard let url = URLComponents(string: value),
+              url.scheme?.lowercased() == "http",
+              let host = url.host else { return false }
+        return isPrivateLANHost(host)
+    }
+
+    static func isPrivateLANHost(_ value: String) -> Bool {
+        let host = value.lowercased()
+        if host == "localhost" || host.hasSuffix(".local") {
+            return true
         }
+        let parts = host.split(separator: ".")
+        let values = parts.compactMap { Int($0) }
+        guard parts.count == 4, values.count == 4,
+              values.allSatisfy({ (0...255).contains($0) }) else {
+            return false
+        }
+        return values[0] == 10 ||
+            values[0] == 127 ||
+            (values[0] == 192 && values[1] == 168) ||
+            (values[0] == 172 && (16...31).contains(values[1]))
+    }
+
+    var activeRemoteDirectory: String {
+        normalizedWebDAVDirectory
     }
 
     var isValid: Bool {
-        switch transport {
-        case .webDAV:
-            return webDAVCandidateBaseURLs.contains(
-                where: Self.isValidWebDAVURL
-            )
-        case .smb:
-            return !normalizedHost.isEmpty &&
-                !normalizedShare.isEmpty
-        }
+        webDAVCandidateBaseURLs.contains(where: Self.isValidWebDAVURL)
     }
 
     func webDAVTitle(
@@ -174,11 +200,13 @@ struct SMBSettings: Codable, Equatable {
         )
 
         if normalized == normalizedWebDAVBaseURL {
-            return webDAVLocalAllowInvalidCertificate
+            return webDAVLocalAllowInvalidCertificate &&
+                Self.isPrivateLANHost(URL(string: normalized)?.host ?? "")
         }
 
         if normalized == normalizedWebDAVRemoteBaseURL {
-            return webDAVRemoteAllowInvalidCertificate
+            // Self-signed certificates on the WAN are not acceptable.
+            return false
         }
 
         return false
@@ -193,7 +221,8 @@ struct SMBSettings: Codable, Equatable {
             host: host,
             port: port
         ) {
-            return webDAVLocalAllowInvalidCertificate
+            return webDAVLocalAllowInvalidCertificate &&
+                Self.isPrivateLANHost(host)
         }
 
         if Self.endpointMatches(
@@ -201,7 +230,7 @@ struct SMBSettings: Codable, Equatable {
             host: host,
             port: port
         ) {
-            return webDAVRemoteAllowInvalidCertificate
+            return false
         }
 
         return false
@@ -358,10 +387,9 @@ struct SMBSettings: Codable, Equatable {
             keyedBy: CodingKeys.self
         )
 
-        transport = try c.decodeIfPresent(
-            ArchiveTransport.self,
-            forKey: .transport
-        ) ?? .webDAV
+        // Preserve old settings but migrate all transfer tasks to WebDAV.
+        // An old persisted "smb" mode is no longer offered or executed.
+        transport = .webDAV
 
         webDAVBaseURL = try c.decodeIfPresent(
             String.self,
@@ -428,10 +456,8 @@ struct SMBSettings: Codable, Equatable {
             forKey: .webDAVRemoteHTTPS
         ) ?? true
 
-        webDAVRemoteAllowInvalidCertificate = try c.decodeIfPresent(
-            Bool.self,
-            forKey: .webDAVRemoteAllowInvalidCertificate
-        ) ?? false
+        // Reject invalid WAN certificate trust in all migrated settings.
+        webDAVRemoteAllowInvalidCertificate = false
 
         webDAVRemoteDirectory = try c.decodeIfPresent(
             String.self,
@@ -481,7 +507,7 @@ struct SMBSettings: Codable, Equatable {
         deleteAfterArchive = try c.decodeIfPresent(
             Bool.self,
             forKey: .deleteAfterArchive
-        ) ?? true
+        ) ?? false
 
         if webDAVLocalHost.isEmpty,
            let legacy = Self.parseLegacyURL(
@@ -502,6 +528,10 @@ struct SMBSettings: Codable, Equatable {
             webDAVRemotePath = legacy.path
             webDAVRemoteHTTPS = legacy.https
         }
+
+        // Legacy WAN HTTP entries must migrate to HTTPS, never remain active.
+        webDAVRemoteHTTPS = true
+        webDAVRemoteAllowInvalidCertificate = false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -509,7 +539,7 @@ struct SMBSettings: Codable, Equatable {
             keyedBy: CodingKeys.self
         )
 
-        try c.encode(transport, forKey: .transport)
+        try c.encode(ArchiveTransport.webDAV, forKey: .transport)
 
         try c.encode(
             normalizedWebDAVBaseURL,

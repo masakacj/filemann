@@ -97,7 +97,43 @@ jobs:
           xcrun simctl boot "$SIM_UDID" || true
           xcrun simctl bootstatus "$SIM_UDID" -b
 
-          openssl req             -x509             -newkey rsa:2048             -sha256             -nodes             -keyout build/mock-webdav/key.pem             -out build/mock-webdav/cert.pem             -days 1             -subj '/CN=localhost'             >/dev/null 2>&1
+          # A private CI CA is added to the simulator trust store.
+          # No app-side TLS trust bypass is used, and no persistent CA is kept.
+          printf '%s\n' \
+            '[req]' \
+            'distinguished_name=dn' \
+            'x509_extensions=v3_ca' \
+            'prompt=no' \
+            '[dn]' \
+            'CN=FileMann Mock WebDAV CA' \
+            '[v3_ca]' \
+            'basicConstraints=critical,CA:TRUE' \
+            'keyUsage=critical,keyCertSign,cRLSign' \
+            'subjectKeyIdentifier=hash' \
+            > build/mock-webdav/root.cnf
+          openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+            -keyout build/mock-webdav/root-key.pem \
+            -out build/mock-webdav/root-cert.pem \
+            -days 1 -config build/mock-webdav/root.cnf >/dev/null 2>&1
+          openssl req -newkey rsa:2048 -nodes -sha256 \
+            -keyout build/mock-webdav/key.pem \
+            -out build/mock-webdav/server.csr \
+            -subj '/CN=localhost' >/dev/null 2>&1
+          printf '%s\n' \
+            'basicConstraints=critical,CA:FALSE' \
+            'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+            'extendedKeyUsage=serverAuth' \
+            'keyUsage=digitalSignature,keyEncipherment' \
+            > build/mock-webdav/server.ext
+          openssl x509 -req -in build/mock-webdav/server.csr \
+            -CA build/mock-webdav/root-cert.pem \
+            -CAkey build/mock-webdav/root-key.pem -CAcreateserial \
+            -out build/mock-webdav/cert.pem -days 1 -sha256 \
+            -extfile build/mock-webdav/server.ext >/dev/null 2>&1
+          openssl verify -CAfile build/mock-webdav/root-cert.pem \
+            build/mock-webdav/cert.pem
+          xcrun simctl keychain "$SIM_UDID" add-root-cert \
+            "$PWD/build/mock-webdav/root-cert.pem"
 
           python3 Tests/MockWebDAV/mock_webdav.py             --port 8765             --log build/mock-webdav/local.jsonl             --label local             >build/logs/mock-local.log 2>&1 &
           LOCAL_PID=$!
@@ -230,7 +266,7 @@ jobs:
 
           gh release delete latest             --repo "$GITHUB_REPOSITORY"             --cleanup-tag             --yes || true
 
-          gh release create latest             "$IPA#FileMann-unsigned.ipa"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "FileMann Latest Verified Unsigned IPA"             --notes "Verified unsigned arm64 iOS build. Unit tests, UI smoke tests, local WebDAV, remote fallback, self-signed HTTPS compatibility, HTTP Range thumbnail checks, and IPA validation passed. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER"             --latest
+          gh release create latest             "$IPA#FileMann-unsigned.ipa"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "FileMann Latest Verified Unsigned IPA"             --notes "Verified unsigned arm64 iOS build. Unit tests, UI smoke tests, local WebDAV, trusted HTTPS remote fallback, HTTP Range thumbnail checks, and IPA validation passed. Commit: $GITHUB_SHA · Build: $GITHUB_RUN_NUMBER"             --latest
 
       - name: Upload diagnostics on failure
         if: failure()

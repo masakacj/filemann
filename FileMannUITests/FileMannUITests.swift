@@ -110,10 +110,6 @@ final class FileMannUITests: XCTestCase {
             "8766"
         app.launchEnvironment["FILEMANN_TEST_REMOTE_HTTPS"] =
             "1"
-        app.launchEnvironment[
-            "FILEMANN_TEST_REMOTE_ALLOW_INVALID_CERT"
-        ] = "1"
-
         app.launch()
         app.tabBars.buttons["NAS"].tap()
 
@@ -132,7 +128,7 @@ final class FileMannUITests: XCTestCase {
         )
     }
 
-    func testRemoteFallbackWorksWithSelfSignedHTTPS() {
+    func testRemoteFallbackWorksWithTrustedHTTPS() {
         let app = XCUIApplication()
         configureBaseEnvironment(app)
 
@@ -153,10 +149,6 @@ final class FileMannUITests: XCTestCase {
             "8766"
         app.launchEnvironment["FILEMANN_TEST_REMOTE_HTTPS"] =
             "1"
-        app.launchEnvironment[
-            "FILEMANN_TEST_REMOTE_ALLOW_INVALID_CERT"
-        ] = "1"
-
         app.launch()
         app.tabBars.buttons["NAS"].tap()
 

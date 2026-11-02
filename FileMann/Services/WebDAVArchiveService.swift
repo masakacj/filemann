@@ -6,6 +6,8 @@ enum WebDAVArchiveError: LocalizedError {
     case noReachableEndpoint
     case unexpectedStatus(Int)
     case forbidden(operation: String, path: String)
+    case duplicateArchiveDirectory(base: String, directory: String)
+    case missingArchiveDestination
     case remoteConflict(String)
     case remoteVerificationFailed
     case sourceUnavailable
@@ -26,6 +28,10 @@ enum WebDAVArchiveError: LocalizedError {
                 ? (path.isEmpty ? "/" : path)
                 : "/\(path)"
             return "WebDAV 拒绝\(operation)（HTTP 403）：\(target)。请核对共享文件夹路径与账号权限；通过远程代理访问时，还需确认代理允许该请求方法。"
+        case .duplicateArchiveDirectory(let base, let directory):
+            return "WebDAV 路径重复：服务地址已包含 \(base)，归档子目录又包含 \(directory)。请将共享名或目录前缀只填写一次，以免 PUT/MKCOL 被拒绝。"
+        case .missingArchiveDestination:
+            return "WebDAV 当前仅指向 NAS 根目录 /，不能直接上传。请先在共享目录中选择可写文件夹，或将服务 URL 配置为包含共享名的路径（例如 /Public）。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -248,16 +254,45 @@ final class WebDAVArchiveService {
         }
     }
 
+    /// The WebDAV root URL and the archive directory must not both include
+    /// the same share/path prefix. nPlayer can browse a share-root URL, but
+    /// appending that path twice makes writes target a different location.
+    private func ensureNoDuplicatedArchivePrefix() throws {
+        let base = baseURL.path
+            .split(separator: "/").map { String($0).lowercased() }
+        let directory = settings.normalizedWebDAVDirectory
+            .split(separator: "/").map { String($0).lowercased() }
+        guard !base.isEmpty, !directory.isEmpty else { return }
+        let limit = min(base.count, directory.count)
+        for count in 1...limit {
+            if Array(base.suffix(count)) == Array(directory.prefix(count)) {
+                throw WebDAVArchiveError.duplicateArchiveDirectory(
+                    base: baseURL.path,
+                    directory: settings.normalizedWebDAVDirectory
+                )
+            }
+        }
+    }
+
     func connectAndPrepare() async throws {
+        try ensureNoDuplicatedArchivePrefix()
         _ = try await propfind(path: "", depth: "0")
         try await ensureDirectory(settings.normalizedWebDAVDirectory)
     }
 
     func testConnection() async throws {
-        try await connectAndPrepare()
         let directory = settings.normalizedWebDAVDirectory
+        let shareRoot = baseURL.path
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !directory.isEmpty || !shareRoot.isEmpty else {
+            throw WebDAVArchiveError.missingArchiveDestination
+        }
+
+        try await connectAndPrepare()
         _ = try await propfind(path: directory, depth: "0")
-        guard !directory.isEmpty else { return }
+        // A share-root URL (such as /Public) is already the destination.
+        // An empty relative directory here is valid and must still undergo
+        // PUT/MOVE/DELETE testing rather than being treated as read-only.
         try await verifyWriteOperations(in: directory)
     }
 
@@ -817,6 +852,14 @@ final class WebDAVArchiveService {
     private func ensureDirectory(_ path: String) async throws {
         let normalized = normalize(path)
         guard !normalized.isEmpty else { return }
+
+        // Some NAS shares allow direct access to the selected destination
+        // but forbid browsing its parent folders. A parent-first PROPFIND
+        // would incorrectly fail with HTTP 403 even when the final folder
+        // is writable. Probe the exact destination first.
+        if try await remoteExists(atPath: normalized) {
+            return
+        }
 
         var current = ""
         for component in normalized

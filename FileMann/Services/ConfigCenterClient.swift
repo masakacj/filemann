@@ -65,29 +65,17 @@ struct FileMannRemoteConfig: Decodable {
                 result.webDAVRemoteAllowInvalidCertificate = value
             }
         }
-        if let smb {
-            if let value = smb.host { result.host = value }
-            if let value = smb.share { result.share = value }
-            if let value = smb.directory { result.remoteDirectory = value }
-            if let value = smb.username { result.username = value }
-            if let value = smb.chunkSizeMB {
-                guard (1...64).contains(value) else {
-                    throw ConfigCenterError.invalidConfiguration
-                }
-                result.chunkSizeMB = value
-            }
-        }
+        // Legacy "smb" configuration remains decodable for older server
+        // records but is deliberately no longer applied to FileMann.
         if let transfer {
-            if let value = transfer.transport {
-                guard let selected = ArchiveTransport(rawValue: value) else {
-                    throw ConfigCenterError.invalidConfiguration
-                }
-                result.transport = selected
-            }
+            // A stale server-side "transport": "smb" cannot re-enable
+            // the retired SMB transport. FileMann always uses WebDAV.
             if let value = transfer.deleteAfterArchive {
                 result.deleteAfterArchive = value
             }
         }
+        result.transport = .webDAV
+        result.webDAVRemoteAllowInvalidCertificate = false
         return result
     }
 
@@ -111,7 +99,9 @@ struct FileMannRemoteConfig: Decodable {
               let host = url.host, !host.isEmpty,
               url.user == nil, url.password == nil,
               url.query == nil, url.fragment == nil,
-              (!remote || scheme == "https") else {
+              (!remote || scheme == "https"),
+              (remote || scheme == "https" ||
+                SMBSettings.isPrivateLANHTTPURL(value)) else {
             throw ConfigCenterError.invalidConfiguration
         }
 
