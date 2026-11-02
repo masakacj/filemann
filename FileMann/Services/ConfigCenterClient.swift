@@ -61,9 +61,8 @@ struct FileMannRemoteConfig: Decodable {
             if let value = webdav.allowInvalidLocalCertificate {
                 result.webDAVLocalAllowInvalidCertificate = value
             }
-            if let value = webdav.allowInvalidRemoteCertificate {
-                result.webDAVRemoteAllowInvalidCertificate = value
-            }
+            // Remote TLS compatibility requires an explicit user action
+            // on the device. The server cannot grant or revoke it.
         }
         // Legacy "smb" configuration remains decodable for older server
         // records but is deliberately no longer applied to FileMann.
@@ -75,7 +74,6 @@ struct FileMannRemoteConfig: Decodable {
             }
         }
         result.transport = .webDAV
-        result.webDAVRemoteAllowInvalidCertificate = false
         return result
     }
 
@@ -84,12 +82,14 @@ struct FileMannRemoteConfig: Decodable {
         remote: Bool,
         to settings: inout SMBSettings
     ) throws {
+        let previousRemoteURL = settings.normalizedWebDAVRemoteBaseURL
         if value.isEmpty {
             if remote {
                 settings.webDAVRemoteHost = ""
                 settings.webDAVRemoteBaseURL = ""
                 settings.webDAVRemotePort = ""
                 settings.webDAVRemotePath = "/"
+                settings.disableRemoteCertificateCompatibility()
             }
             return
         }
@@ -112,6 +112,9 @@ struct FileMannRemoteConfig: Decodable {
                 ? "/" : url.percentEncodedPath
             settings.webDAVRemoteHTTPS = scheme == "https"
             settings.webDAVRemoteBaseURL = ""
+            if previousRemoteURL != settings.normalizedWebDAVRemoteBaseURL {
+                settings.disableRemoteCertificateCompatibility()
+            }
         } else {
             settings.webDAVLocalHost = host
             settings.webDAVLocalPort = url.port.map(String.init) ?? ""

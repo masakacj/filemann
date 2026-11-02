@@ -114,6 +114,83 @@ final class SMBSettingsTests: XCTestCase {
         ))
     }
 
+    func testRemoteCertificateCompatibilityRequiresExplicitEndpointGrant() throws {
+        var settings = SMBSettings()
+        settings.webDAVRemoteHost = "nas.example.com"
+        settings.webDAVRemotePort = "18443"
+        settings.webDAVRemotePath = "/webdav"
+        settings.webDAVRemoteHTTPS = true
+
+        // A legacy Bool alone must never enable a WAN TLS bypass.
+        settings.webDAVRemoteAllowInvalidCertificate = true
+        XCTAssertFalse(settings.isRemoteCertificateCompatibilityEnabled)
+
+        settings.enableRemoteCertificateCompatibility()
+        XCTAssertTrue(settings.isRemoteCertificateCompatibilityEnabled)
+        XCTAssertTrue(settings.webDAVAllowsInvalidCertificate(
+            for: "https://nas.example.com:18443/webdav"
+        ))
+        XCTAssertTrue(settings.webDAVAllowsInvalidCertificate(
+            host: "nas.example.com", port: 18443
+        ))
+        XCTAssertFalse(settings.webDAVAllowsInvalidCertificate(
+            host: "nas.example.com", port: 443
+        ))
+        XCTAssertFalse(settings.webDAVAllowsInvalidCertificate(
+            for: "https://other.example.com:18443/webdav"
+        ))
+
+        let saved = try JSONEncoder().encode(settings)
+        let restored = try JSONDecoder().decode(SMBSettings.self, from: saved)
+        XCTAssertTrue(restored.isRemoteCertificateCompatibilityEnabled)
+        XCTAssertTrue(restored.webDAVAllowsInvalidCertificate(
+            for: restored.normalizedWebDAVRemoteBaseURL
+        ))
+
+        var changed = restored
+        changed.webDAVRemoteHost = "other.example.com"
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+        changed = restored
+        changed.webDAVRemotePort = "18444"
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+        changed = restored
+        changed.webDAVRemotePath = "/different"
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+        changed = restored
+        changed.disableRemoteCertificateCompatibility()
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+    }
+
+    func testConfigCenterCannotTurnOnRemoteCompatibility() throws {
+        var existing = SMBSettings()
+        existing.webDAVRemoteHost = "nas.example.com"
+        existing.webDAVRemoteHTTPS = true
+        let payload = Data("""
+        {"webdav":{"allowInvalidRemoteCertificate":true,
+                   "remoteURL":"https://nas.example.com/"}}
+        """.utf8)
+        let config = try JSONDecoder().decode(
+            FileMannRemoteConfig.self, from: payload
+        )
+        let updated = try config.applying(to: existing)
+        XCTAssertFalse(updated.isRemoteCertificateCompatibilityEnabled)
+
+        var optedIn = updated
+        optedIn.enableRemoteCertificateCompatibility()
+        XCTAssertTrue(optedIn.isRemoteCertificateCompatibilityEnabled)
+        let same = try config.applying(to: optedIn)
+        XCTAssertTrue(same.isRemoteCertificateCompatibilityEnabled)
+
+        let newURL = try JSONDecoder().decode(
+            FileMannRemoteConfig.self,
+            from: Data("""
+            {"webdav":{"remoteURL":"https://new-nas.example.com/"}}
+            """.utf8)
+        )
+        XCTAssertFalse(try newURL.applying(to: optedIn)
+            .isRemoteCertificateCompatibilityEnabled)
+    }
+
     func testServerSMBTransportCannotReenableLegacyProtocol() throws {
         let data = Data("""
         {"transfer":{"transport":"smb"},

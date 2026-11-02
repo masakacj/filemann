@@ -871,6 +871,7 @@ private struct WebDAVEndpointEditor: View {
     @State private var verifiedFingerprint = ""
     @State private var pinnedFingerprint: String?
     @State private var confirmCertificatePin = false
+    @State private var confirmRemoteTLSCompatibility = false
 
     var body: some View {
         Form {
@@ -927,7 +928,18 @@ private struct WebDAVEndpointEditor: View {
                         )
                     }
                 } else {
-                    LabeledContent("安全要求", value: "HTTPS / 有效证书")
+                    LabeledContent("远程连接", value: "仅 HTTPS")
+                    Toggle(
+                        "兼容 NAS 自签/无效证书",
+                        isOn: invalidCertificateBinding
+                    )
+                    Text(
+                        "仅在你信任这个 NAS 地址时开启。允许此地址在证书过期、"
+                        + "自签或域名不匹配时连接；不会允许其他服务器。"
+                        + " 不需要复制 SHA-256 指纹。"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
 
@@ -942,7 +954,7 @@ private struct WebDAVEndpointEditor: View {
                 Text(
                     endpoint == .local
                         ? "本地 WebDAV HTTP 仅限私有局域网地址（例如 192.168.x.x），也可启用 HTTPS。"
-                        : "外网地址必须通过 HTTPS；对于私有 NAS 自签证书，请先从 NAS 管理界面核对指纹，再单独固定信任。"
+                        : "远程仍使用 HTTPS；如果 nPlayer 可以连接但 FileMann 提示证书错误，可在高级设置中单独开启本 NAS 证书兼容模式。"
                 )
             }
 
@@ -959,6 +971,23 @@ private struct WebDAVEndpointEditor: View {
             certificateStatus = nil
             verifiedFingerprint = ""
             refreshCertificatePin()
+        }
+        .confirmationDialog(
+            "放宽该 NAS 的 HTTPS 证书校验？",
+            isPresented: $confirmRemoteTLSCompatibility,
+            titleVisibility: .visible
+        ) {
+            Button("仅对此 NAS 开启兼容模式") {
+                settings.enableRemoteCertificateCompatibility()
+                certificateStatus = "已开启当前 NAS 证书兼容模式；请返回设置并保存。"
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "仍会通过 HTTPS 传输，但不能确认服务器证书的真实身份，"
+                + "可能面临中间人攻击。仅在可信 NAS 环境使用，"
+                + "修改服务器地址时将自动关闭。"
+            )
         }
         .alert("信任这个 NAS 服务器证书？", isPresented: $confirmCertificatePin) {
             Button("取消", role: .cancel) {}
@@ -1177,6 +1206,9 @@ private struct WebDAVEndpointEditor: View {
                 if endpoint == .local {
                     settings.webDAVLocalHost = value
                 } else {
+                    if settings.webDAVRemoteHost != value {
+                        settings.disableRemoteCertificateCompatibility()
+                    }
                     settings.webDAVRemoteHost = value
                 }
             }
@@ -1195,6 +1227,9 @@ private struct WebDAVEndpointEditor: View {
                 if endpoint == .local {
                     settings.webDAVLocalPort = filtered
                 } else {
+                    if settings.webDAVRemotePort != filtered {
+                        settings.disableRemoteCertificateCompatibility()
+                    }
                     settings.webDAVRemotePort = filtered
                 }
             }
@@ -1212,6 +1247,9 @@ private struct WebDAVEndpointEditor: View {
                 if endpoint == .local {
                     settings.webDAVLocalPath = value
                 } else {
+                    if settings.webDAVRemotePath != value {
+                        settings.disableRemoteCertificateCompatibility()
+                    }
                     settings.webDAVRemotePath = value
                 }
             }
@@ -1240,13 +1278,15 @@ private struct WebDAVEndpointEditor: View {
             get: {
                 endpoint == .local
                     ? settings.webDAVLocalAllowInvalidCertificate
-                    : settings.webDAVRemoteAllowInvalidCertificate
+                    : settings.isRemoteCertificateCompatibilityEnabled
             },
             set: { value in
                 if endpoint == .local {
                     settings.webDAVLocalAllowInvalidCertificate = value
+                } else if value {
+                    confirmRemoteTLSCompatibility = true
                 } else {
-                    settings.webDAVRemoteAllowInvalidCertificate = value
+                    settings.disableRemoteCertificateCompatibility()
                 }
             }
         )
