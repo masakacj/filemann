@@ -142,12 +142,10 @@ final class WebDAVCertificateTrustTests: XCTestCase {
             SMBSettings.self, from: JSONEncoder().encode(settings)
         )
         XCTAssertTrue(restored.isRemoteCertificateCompatibilityEnabled)
-        XCTAssertEqual(
-            try await WebDAVArchiveService.resolveBestBaseURL(
-                settings: restored, password: "filemann-pass"
-            ),
-            "https://127.0.0.1:8767"
+        let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
+            settings: restored, password: "filemann-pass"
         )
+        XCTAssertEqual(resolved, "https://127.0.0.1:8767")
 
         var changed = restored
         changed.webDAVRemotePort = "8766"
