@@ -76,6 +76,7 @@ targets:
     sources:
       - path: FileMannShare
       - path: Shared/FileMannShareGroup.swift
+      - path: Shared/FileMannShareFileNaming.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.masakacj.filemann.share
