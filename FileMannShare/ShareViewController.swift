@@ -11,6 +11,24 @@ final class ShareViewController: UIViewController {
     private let action = UIButton(type: .system)
     private let cancel = UIButton(type: .system)
     private var isSubmitting = false
+    private let batchProgress = UIProgressView(progressViewStyle: .default)
+    private var partialImport: ShareImportSummary?
+
+    private struct ShareImportSummary {
+        var received: Int
+        var imported = 0
+        var unsupported = 0
+        var failed = 0
+        var firstErrors: [String] = []
+
+        var hasIssues: Bool { unsupported > 0 || failed > 0 }
+    }
+
+    private func sharedProviders() -> [NSItemProvider] {
+        (extensionContext?.inputItems ?? [])
+            .compactMap { $0 as? NSExtensionItem }
+            .flatMap { $0.attachments ?? [] }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -24,7 +42,12 @@ final class ShareViewController: UIViewController {
         info.numberOfLines = 0
         info.font = .preferredFont(forTextStyle: .subheadline)
         info.textColor = .secondaryLabel
-        info.text = "将共享文件加入持久化队列。无法直接使用原文件时，会临时暂存一份，成功归档后自动清理。"
+        let count = sharedProviders().count
+        info.text = count > 0
+            ? "本次接收 \(count) 项照片或视频。逐项保存到持久化队列；iOS 可能为分享创建临时副本，NAS 验证后会清理暂存。"
+            : "将照片和视频加入 FileMann 持久化队列；传输时不会主动删除相册原件。"
+        batchProgress.isHidden = true
+        batchProgress.progress = 0
 
         action.setTitle("添加到传输队列", for: .normal)
         action.addTarget(self, action: #selector(beginImport), for: .touchUpInside)
@@ -37,7 +60,9 @@ final class ShareViewController: UIViewController {
         controls.distribution = .equalSpacing
         controls.alignment = .center
 
-        let stack = UIStackView(arrangedSubviews: [title, info, controls])
+        let stack = UIStackView(arrangedSubviews: [
+            title, info, batchProgress, controls
+        ])
         stack.axis = .vertical
         stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -59,23 +84,69 @@ final class ShareViewController: UIViewController {
 
     @objc private func beginImport() {
         guard !isSubmitting else { return }
+        if partialImport != nil {
+            // We deliberately avoid silently closing on partial failure.
+            // The user must acknowledge that only the reported subset
+            // reached the durable App Group inbox.
+            extensionContext?.completeRequest(
+                returningItems: [], completionHandler: nil
+            )
+            return
+        }
+
         isSubmitting = true
         action.isEnabled = false
         progress.startAnimating()
+        batchProgress.isHidden = false
+        batchProgress.progress = 0
+
         Task { @MainActor in
             do {
-                let count = try await importAttachments()
-                guard count > 0 else {
-                    throw ShareError.noMedia
-                }
-                info.text = "已加入 \(count) 个文件。打开 FileMann 后可查看并启动传输。"
+                let summary = try await importAttachments()
                 progress.stopAnimating()
+                batchProgress.progress = 1
+
+                guard summary.imported > 0 else {
+                    let first = summary.firstErrors.first
+                        ?? "没有任何支持的图片或视频"
+                    throw ShareError.allFailed(
+                        "接收 \(summary.received) 项，成功 0 项，" +
+                        "失败 \(summary.failed) 项，不支持 \(summary.unsupported) 项。" +
+                        first
+                    )
+                }
+
+                if summary.hasIssues {
+                    // Never report success for 200 items if only some were
+                    // staged. Already-staged media is durable and remains
+                    // available to FileMann after this extension exits.
+                    partialImport = summary
+                    let detail = summary.firstErrors.prefix(2)
+                        .joined(separator: "\n")
+                    info.text =
+                        "已暂存 \(summary.imported)/\(summary.received) 项；" +
+                        "失败 \(summary.failed) 项、不支持 \(summary.unsupported) 项。" +
+                        (detail.isEmpty ? "" : "\n" + detail) +
+                        "\n已暂存内容不会因关闭面板丢失；" +
+                        "请在相册重新选择剩余项目。"
+                    action.setTitle(
+                        "完成（保留已导入 \(summary.imported) 项）",
+                        for: .normal
+                    )
+                    cancel.setTitle("关闭（保留暂存）", for: .normal)
+                    action.isEnabled = true
+                    isSubmitting = false
+                    return
+                }
+
+                info.text = "已加入 \(summary.imported) 项到持久化队列。打开 FileMann 后可查看和启动传输。"
                 extensionContext?.completeRequest(
                     returningItems: [], completionHandler: nil
                 )
             } catch {
                 progress.stopAnimating()
-                info.text = "未能加入队列：\(error.localizedDescription)"
+                batchProgress.isHidden = true
+                info.text = "未能完成导入：\(error.localizedDescription)"
                 action.isEnabled = true
                 isSubmitting = false
             }
@@ -83,58 +154,70 @@ final class ShareViewController: UIViewController {
     }
 
     private enum ShareError: LocalizedError {
-        case noMedia
-        case providerFailed
+        case allFailed(String)
 
         var errorDescription: String? {
             switch self {
-            case .noMedia: return "没有可传输的图片或视频"
-            case .providerFailed: return "无法读取分享的文件"
+            case .allFailed(let message):
+                return message
             }
         }
     }
 
-    private func importAttachments() async throws -> Int {
-        // FileMann and this extension use the same group resolved from their
-        // signed provisioning profiles.
+    private func importAttachments() async throws -> ShareImportSummary {
+        // Keep each successfully staged file instead of rolling back an
+        // entire 200+ item batch because one asset lacks an original name.
+        // A suspended/killed extension cannot guarantee completion, but
+        // everything it has already staged can be imported by the main app.
         let inbox = try FileMannShareGroup.incomingDirectory()
-        let providers = (extensionContext?.inputItems ?? [])
-            .compactMap { $0 as? NSExtensionItem }
-            .flatMap { $0.attachments ?? [] }
+        let providers = sharedProviders()
+        var summary = ShareImportSummary(received: providers.count)
 
-        var created: [URL] = []
-        do {
-            for provider in providers {
-                try Task.checkCancellation()
+        for (index, provider) in providers.enumerated() {
+            try Task.checkCancellation()
+            let processed = index + 1
+            info.text =
+                "正在处理 \(processed)/\(providers.count) 项 · " +
+                "已暂存 \(summary.imported) 项 · " +
+                "失败 \(summary.failed + summary.unsupported) 项"
+            batchProgress.progress =
+                Float(index) / Float(max(1, providers.count))
 
-                // Prefer HEIC/HEIF/MOV/MP4, not a converted generic image.
-                let supported = provider.registeredTypeIdentifiers.filter {
-                    guard let kind = UTType($0) else { return false }
-                    return kind.conforms(to: .movie) ||
-                        kind.conforms(to: .image)
-                }
-                let identifier = supported.first {
-                    $0 != UTType.image.identifier &&
-                        $0 != UTType.movie.identifier
-                } ?? supported.first
-                guard let identifier else { continue }
+            // Prefer the actual media representation, not a generic
+            // converted image or an unsupported text/file attachment.
+            let supported = provider.registeredTypeIdentifiers.filter {
+                guard let kind = UTType($0) else { return false }
+                return kind.conforms(to: .movie) ||
+                    kind.conforms(to: .image)
+            }
+            let identifier = supported.first {
+                $0 != UTType.image.identifier &&
+                    $0 != UTType.movie.identifier
+            } ?? supported.first
+            guard let identifier else {
+                summary.unsupported += 1
+                continue
+            }
 
-                let destination = try await stageMedia(
+            do {
+                _ = try await stageMedia(
                     provider,
                     typeIdentifier: identifier,
                     inbox: inbox
                 )
-                created.append(destination)
+                summary.imported += 1
+            } catch {
+                summary.failed += 1
+                if summary.firstErrors.count < 3 {
+                    summary.firstErrors.append(
+                        "第 \(processed) 项：\(error.localizedDescription)"
+                    )
+                }
             }
-            return created.count
-        } catch {
-            // All-or-nothing staging: do not strand extra copies when one
-            // of the selected photos fails or the user cancels.
-            for file in created {
-                try? FileManager.default.removeItem(at: file)
-            }
-            throw error
+            batchProgress.progress =
+                Float(processed) / Float(max(1, providers.count))
         }
+        return summary
     }
 
     /// NSItemProvider URLs may be invalid as soon as their callback returns.
