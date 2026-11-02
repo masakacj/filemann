@@ -12,6 +12,8 @@ private struct BackgroundUploadDescriptor: Codable {
     let finalPath: String
     let expectedBytes: Int64
     let baseURLString: String
+    // Optional for decoding tasks scheduled by previous releases.
+    let uploadMode: WebDAVUploadMode?
 }
 
 final class WebDAVBackgroundUploadManager: NSObject {
@@ -32,14 +34,16 @@ final class WebDAVBackgroundUploadManager: NSObject {
         partialPath: String,
         finalPath: String,
         expectedBytes: Int64,
-        baseURLString: String
+        baseURLString: String,
+        uploadMode: WebDAVUploadMode
     ) throws {
         let descriptor = BackgroundUploadDescriptor(
             taskID: taskID,
             partialPath: partialPath,
             finalPath: finalPath,
             expectedBytes: expectedBytes,
-            baseURLString: baseURLString
+            baseURLString: baseURLString,
+            uploadMode: uploadMode
         )
         let data = try JSONEncoder().encode(descriptor)
 
@@ -289,6 +293,15 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
             return
         }
 
+        if let response = task.response as? HTTPURLResponse,
+           [409, 412].contains(response.statusCode) {
+            postFailure(
+                taskID: descriptor.taskID,
+                message: "NAS 已存在同名文件（HTTP \(response.statusCode)），已阻止覆盖；请重新命名后重试"
+            )
+            return
+        }
+
         guard let response = task.response as? HTTPURLResponse,
               (200...299).contains(response.statusCode) else {
             let status = (task.response as? HTTPURLResponse)?.statusCode ?? -1
@@ -315,7 +328,8 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
                     result = try await service.finalizeBackgroundUpload(
                         partialPath: descriptor.partialPath,
                         finalPath: descriptor.finalPath,
-                        expectedBytes: descriptor.expectedBytes
+                        expectedBytes: descriptor.expectedBytes,
+                        uploadMode: descriptor.uploadMode ?? .atomicMove
                     )
                 } catch {
                     let resolved = try await WebDAVArchiveService.resolveBestBaseURL(
@@ -331,7 +345,8 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
                     result = try await service.finalizeBackgroundUpload(
                         partialPath: descriptor.partialPath,
                         finalPath: descriptor.finalPath,
-                        expectedBytes: descriptor.expectedBytes
+                        expectedBytes: descriptor.expectedBytes,
+                        uploadMode: descriptor.uploadMode ?? .atomicMove
                     )
                 }
 
