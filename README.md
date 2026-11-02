@@ -1,6 +1,17 @@
 # FileMann
 
-FileMann EasySign 单 App 版：本地媒体库、逐帧播放器和 SMB/NAS 归档已经合并为一个主界面。
+FileMann EasySign 单 App 版：本地媒体库、逐帧播放器和 WebDAV/NAS 归档合并为一个主界面。
+
+## NAS 传输协议与公网安全
+
+FileMann 现在仅使用 **WebDAV** 进行 NAS 浏览和归档：局域网 WebDAV 优先，无法连接时尝试外网 WebDAV **HTTPS**。旧版存储的 SMB 设置只供兼容迁移，不再出现在设置 UI，也不会启动 SMB 上传任务。
+
+- 公网禁止暴露 SMB TCP 445、NetBIOS 137–139，也不建议公网直连 NAS 管理界面；优先采用 VPN / Zero Trust 私有访问。
+- 如必须提供公网 WebDAV，仅通过可信 TLS 证书的 HTTPS 反向代理连接，并配置独立归档账号、最小读写权限、限制登录尝试次数与日志告警；对 FileMann 需支持 PROPFIND、PUT、MOVE、DELETE 等方法。
+- 本地 HTTP 仅在私有 LAN 地址上允许；公网连接强制 HTTPS 且不允许关闭证书校验。
+- 同步前在实际归档目录写入、重命名、删除随机临时测试文件。**目录能列出不代表可以上传。**
+- iOS 后台 URLSession 可接管文件上传，但 NAS 若不支持 HTTP resumable upload，网络中断后的重试可能需要重传完整文件；当前不能保证字节级续传。URLSession 也可能创建上传临时副本，完成后由系统回收。
+- NAS 私密账号及外网地址只保存在个人配置中心，不能写进 GitHub。
 
 ## 主界面
 
@@ -13,7 +24,7 @@ FileMann EasySign 单 App 版：本地媒体库、逐帧播放器和 SMB/NAS 归
 - 重复文件处理
 - NAS 双边校验结果
 - 单任务状态
-- SMB / NAS 设置
+- WebDAV / NAS 设置
 
 媒体多选后直接点：
 
@@ -147,7 +158,7 @@ WebDAV 现在支持两个地址：
 
 归档、目录浏览和 NAS 媒体浏览都使用同一套策略。
 
-远程地址建议使用可信 HTTPS。外网使用 HTTP 会暴露 WebDAV Basic Auth 和媒体内容，不建议。
+外网 WebDAV 只接受可信 HTTPS，HTTP 公网连接不会进入上传候选列表；证书错误不会被忽略。
 
 ## NAS 媒体浏览
 
