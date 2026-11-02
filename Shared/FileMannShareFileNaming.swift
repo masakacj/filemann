@@ -1,107 +1,103 @@
 import Foundation
 import UniformTypeIdentifiers
 
-/// Names a file received from Photos / Files without using the temporary
-/// NSItemProvider export filename as if it were the original media title.
-/// The original filename is available only when the share provider exposes it.
+/// The App Group staging name is private. The NAS name must be the exact
+/// filename provided by Photos / Files, except a collision suffix.
+/// Never synthesize a name, transliterate Unicode, replace punctuation,
+/// truncate the stem, or change an extension's spelling/case.
 enum FileMannShareFileNaming {
+    enum NameError: LocalizedError {
+        case originalFilenameUnavailable
+        case invalidOriginalFilename
+
+        var errorDescription: String? {
+            switch self {
+            case .originalFilenameUnavailable:
+                return "分享来源未提供可靠的原文件名，已停止导入。不会改成 shared-media、VID 或随机名称；请从“文件”App 选择保留原名的文件，或换一种提供原名的分享方式。"
+            case .invalidOriginalFilename:
+                return "分享来源文件名无法原样用于存储（包含路径分隔符或无效字符），已停止导入，不会擅自改名。"
+            }
+        }
+    }
+
+    /// typeIdentifier is intentionally not used to append a guessed
+    /// extension. If only an extensionless name is available, the original
+    /// full filename is unknown.
     static func preferredName(
         suggestedName: String?,
         sourceFilename: String?,
-        typeIdentifier: String,
-        now: Date = Date(),
-        token: UUID = UUID()
-    ) -> String {
-        let preferredExtension =
-            UTType(typeIdentifier)?.preferredFilenameExtension ?? "bin"
+        typeIdentifier: String
+    ) throws -> String {
+        let suggested = try validatedOriginal(suggestedName)
+        let source = try validatedOriginal(sourceFilename)
 
-        let proposed = meaningfulName(suggestedName)
-        let source = meaningfulName(sourceFilename)
-
-        if let proposed {
-            // If the suggestion is just "IMG_1234" and the file provider
-            // supplies "IMG_1234.MOV", preserve the actual extension.
-            if let source,
-               (proposed as NSString).pathExtension.isEmpty,
-               (source as NSString).deletingPathExtension
-                    .caseInsensitiveCompare(proposed) == .orderedSame {
-                return cleanFilename(source, fileExtension: preferredExtension)
+        if let suggested {
+            if (suggested as NSString).pathExtension.isEmpty {
+                if let source,
+                   (source as NSString).deletingPathExtension == suggested,
+                   !(source as NSString).pathExtension.isEmpty {
+                    return source
+                }
+                throw NameError.originalFilenameUnavailable
             }
-            return cleanFilename(proposed, fileExtension: preferredExtension)
+            return suggested
         }
-        if let source {
-            return cleanFilename(source, fileExtension: preferredExtension)
+        if let source, !(source as NSString).pathExtension.isEmpty {
+            return source
         }
-
-        // The Photos extension cannot always access PHAssetResource.
-        // In that case generate a unique, recognizable name instead of
-        // repeatedly uploading "shared-media.mp4".
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyyMMdd_HHmmss"
-        let prefix = UTType(typeIdentifier)?.conforms(to: .movie) == true
-            ? "VID" : "IMG"
-        let suffix = String(token.uuidString.prefix(8)).uppercased()
-        return "\(prefix)_\(formatter.string(from: now))_\(suffix).\(preferredExtension)"
+        throw NameError.originalFilenameUnavailable
     }
 
-    private static func meaningfulName(_ value: String?) -> String? {
+    /// Disallow synthetic fallback names produced by older releases.
+    /// Existing completed uploads remain untouched; pending shares without
+    /// a known original must be renamed by the user or reimported.
+    static func isReliableOriginalFilename(_ value: String) -> Bool {
+        (try? validatedOriginal(value)) != nil &&
+            !(value as NSString).pathExtension.isEmpty
+    }
+
+    private static func validatedOriginal(_ value: String?) throws -> String? {
         guard let value else { return nil }
-        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return nil }
-        let filename = (raw as NSString).lastPathComponent
-        let stem = (filename as NSString).deletingPathExtension
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        if value.isEmpty ||
+            value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            value == "." || value == ".." {
+            return nil
+        }
+        guard !value.contains("/"), !value.contains("\\"),
+              !value.contains("\0") else {
+            throw NameError.invalidOriginalFilename
+        }
+
+        let stem = (value as NSString).deletingPathExtension.lowercased()
         let generic: Set<String> = [
             "shared-media", "shared_media", "sharedmedia",
             "image", "video", "movie", "file", "media",
-            "fullsizeoutput", "tmp", "temporary"
+            "fullsizeoutput", "tmp", "temporary",
+            "temporary-file", "temp", "untitled"
         ]
-        guard !stem.isEmpty, !generic.contains(stem) else {
+        if generic.contains(stem) || UUID(uuidString: stem) != nil {
             return nil
         }
-        // A filename consisting solely of a UUID is usually the provider's
-        // temporary staging name, not a user-supplied Photos filename.
-        if UUID(uuidString: stem) != nil { return nil }
-        return filename
+        // Earlier FileMann versions generated names without having obtained
+        // an original filename. Do not regard these as original names.
+        if stem.range(
+            of: #"^(vid|img)_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}$"#,
+            options: .regularExpression
+        ) != nil {
+            return nil
+        }
+        return value
     }
 
-    private static func cleanFilename(
-        _ value: String,
-        fileExtension: String
-    ) -> String {
-        let candidate = (value as NSString).lastPathComponent
-        let currentExtension = (candidate as NSString).pathExtension
-        let extensionName = currentExtension.isEmpty
-            ? fileExtension : currentExtension
-        let stem = currentExtension.isEmpty
-            ? candidate
-            : (candidate as NSString).deletingPathExtension
-        let permitted = CharacterSet.alphanumerics.union(
-            CharacterSet(charactersIn: "._- ()[]")
-        )
-        let cleaned = String(stem.unicodeScalars.map {
-            permitted.contains($0) ? Character($0) : "_"
-        }).trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-        let shortStem = String(cleaned.prefix(140))
-        let name = shortStem.isEmpty ? "media" : shortStem
-        let cleanExtension = String(extensionName.unicodeScalars.map {
-            CharacterSet.alphanumerics.contains($0) ? Character($0) : "_"
-        })
-        return name + "." + cleanExtension
-    }
-
-    /// Called inside an NSItemProvider callback while its temporary source
-    /// URL is still valid. Try a hard link before the unavoidable copy.
+    /// The UUID prefix is used only inside the staging inbox to allow two
+    /// photos with the same filename to coexist. It is removed at import.
     static func stage(
         sourceURL: URL,
         suggestedName: String?,
         typeIdentifier: String,
         in inbox: URL
     ) throws -> URL {
-        let filename = preferredName(
+        let filename = try preferredName(
             suggestedName: suggestedName,
             sourceFilename: sourceURL.lastPathComponent,
             typeIdentifier: typeIdentifier
