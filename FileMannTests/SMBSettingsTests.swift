@@ -313,6 +313,43 @@ final class SMBSettingsTests: XCTestCase {
         }
     }
 
+    func testPublishedFileRequiresActualParentDirectoryListing() async throws {
+        let service = try mockWebDAVService(directory: "Album")
+        let valid = try await service.verifyPublishedFile(
+            at: "Album/sample.jpg",
+            expectedBytes: Int64(
+                try await service.downloadData(path: "Album/sample.jpg").count
+            )
+        )
+        XCTAssertEqual(valid.remotePath, "Album/sample.jpg")
+
+        // Fake HEAD says 200 and advertises a plausible size. The file
+        // never appears in Depth:1 PROPFIND, so do not mark it completed.
+        let phantomSize = await service.remoteFileSize(
+            atPath: "Album/phantom.mp4"
+        )
+        XCTAssertEqual(phantomSize, Int64("fake-file-size-only".utf8.count))
+        do {
+            _ = try await service.verifyPublishedFile(
+                at: "Album/phantom.mp4",
+                expectedBytes: Int64("fake-file-size-only".utf8.count)
+            )
+            XCTFail("HEAD-only files must not count as uploaded")
+        } catch WebDAVArchiveError.remoteFileNotListed(let url) {
+            XCTAssertTrue(url.contains("Album/phantom.mp4"))
+        }
+
+        do {
+            _ = try await service.verifyPublishedFile(
+                at: "Album/sample.jpg",
+                expectedBytes: 1
+            )
+            XCTFail("A wrong directory listing size must be rejected")
+        } catch WebDAVArchiveError.remoteFileSizeMismatch {
+            // Expected: the exact path exists, but the size differs.
+        }
+    }
+
     func testPutOnlyNASUsesSafeDirectPUT() async throws {
         let service = try mockWebDAVService(directory: "PutOnly")
         let mode = try await service.preferredUploadMode()
