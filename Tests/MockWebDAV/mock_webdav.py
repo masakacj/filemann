@@ -166,8 +166,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403, "Depth infinity is forbidden")
             return
         entries = []
+        seen_hrefs = set()
 
         def add_response(href, collection=False, size=None, content_type=None):
+            if href in seen_hrefs:
+                return
+            seen_hrefs.add(href)
             resource = (
                 "<d:collection/>" if collection else ""
             )
@@ -255,6 +259,22 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_error(404)
             return
+
+        # List files created by PUT (or moved via MOVE), not just fixed
+        # fixtures. A real WebDAV directory must reflect writes; without
+        # this a genuine successfully uploaded file looks like a phantom.
+        if depth != "0" and path in {
+            "/", "/ReadOnly", "/PutOnly", "/ParentDenied/Upload",
+            "/Album", "/Album/Nested",
+        }:
+            for remote_path, data in list(self.state.files.items()):
+                parent = remote_path.rsplit("/", 1)[0] or "/"
+                if parent == path:
+                    add_response(
+                        remote_path,
+                        size=len(data),
+                        content_type=self._content_type_for_path(remote_path)
+                    )
 
         payload = (
             '<?xml version="1.0" encoding="utf-8"?>'
