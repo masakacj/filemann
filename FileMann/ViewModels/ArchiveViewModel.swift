@@ -418,10 +418,12 @@ final class ArchiveViewModel: ObservableObject {
         Task {
             do {
                 let service = try await makeReachableWebDAVService()
-                try await service.testConnection()
+                let mode = try await service.preferredUploadMode()
                 connectionTestMessage =
                     "连接成功（" + (activeWebDAVEndpoint ?? "NAS") +
-                    "）；PUT / MOVE / DELETE 写入权限已验证"
+                    "）；" + (mode == .atomicMove
+                        ? "PUT / MOVE 已验证，可原子重命名"
+                        : "PUT 已验证，NAS 不支持 MOVE，启用直传模式")
             } catch {
                 connectionTestMessage =
                     "WebDAV 连接或写入测试失败（" +
@@ -566,7 +568,7 @@ final class ArchiveViewModel: ObservableObject {
                 // Listing a WebDAV folder does not prove PUT/MOVE/DELETE
                 // permissions. Verify real archive writes before iOS stages
                 // an entire video for background upload.
-                try await service.testConnection()
+                let uploadMode = try await service.preferredUploadMode()
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
                 if foundNewDuplicates || unresolvedDuplicateCount > 0 {
@@ -614,9 +616,13 @@ final class ArchiveViewModel: ObservableObject {
 
                         try await service.prepareParentDirectory(for: finalPath)
 
-                        let partialPath =
-                            finalPath + ".filemann-" + taskID.uuidString.lowercased() + ".partial"
-                        let request = try service.makeUploadRequest(path: partialPath)
+                        let partialPath = uploadMode == .atomicMove
+                            ? finalPath + ".filemann-" + taskID.uuidString.lowercased() + ".partial"
+                            : finalPath
+                        let request = try service.makeUploadRequest(
+                            path: partialPath,
+                            failIfExists: uploadMode == .directPut
+                        )
 
                         try manager.schedule(
                             taskID: taskID,
@@ -625,7 +631,8 @@ final class ArchiveViewModel: ObservableObject {
                             partialPath: partialPath,
                             finalPath: finalPath,
                             expectedBytes: snapshot.fileSize,
-                            baseURLString: service.baseURLString
+                            baseURLString: service.baseURLString,
+                            uploadMode: uploadMode
                         )
 
                         tasks[index].state = .uploading
