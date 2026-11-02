@@ -260,12 +260,20 @@ final class WebDAVArchiveService {
             request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVArchiveError.invalidResponse
         }
         guard [200, 207].contains(http.statusCode) else {
             throw WebDAVArchiveError.unexpectedStatus(http.statusCode)
+        }
+
+        // Some HTTP web servers return 200 HTML to every method (for
+        // example Portainer or an incorrectly routed reverse proxy).
+        // Do not mistake them for writable WebDAV endpoints.
+        let resources = try WebDAVMultiStatusParser(data: data).parse()
+        guard !resources.isEmpty else {
+            throw WebDAVArchiveError.invalidResponse
         }
     }
 
@@ -321,7 +329,13 @@ final class WebDAVArchiveService {
         try ensureNoDuplicatedArchivePrefix(for: directory)
         let url = remoteURL(for: directory)
         do {
-            _ = try await propfind(path: directory, depth: "0")
+            let response = try await propfind(path: directory, depth: "0")
+            let resources = try WebDAVMultiStatusParser(
+                data: response
+            ).parse()
+            guard resources.contains(where: { $0.isCollection }) else {
+                throw WebDAVArchiveError.invalidResponse
+            }
         } catch WebDAVArchiveError.unexpectedStatus(let code)
             where code == 404 {
             throw WebDAVArchiveError.archiveDirectoryMissing(
