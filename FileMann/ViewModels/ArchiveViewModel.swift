@@ -558,44 +558,28 @@ final class ArchiveViewModel: ObservableObject {
             statusMessage = "只能修改尚未归档的相册分享文件"
             return
         }
-        let raw = (proposed.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ) as NSString).lastPathComponent
-        guard !raw.isEmpty, raw != ".", raw != ".." else {
-            statusMessage = "请输入有效的文件名"
+        // A manual rename is explicit; never silently sanitize, truncate,
+        // normalize Unicode, or change the extension's case.
+        let requested = proposed
+        guard !requested.isEmpty,
+              !requested.trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty,
+              requested != ".", requested != "..",
+              !requested.contains("/"),
+              !requested.contains("\\"),
+              !requested.contains("\0") else {
+            statusMessage = "文件名包含不允许的路径字符；不会擅自替换或截断"
             return
         }
-        let existingExtension =
-            (tasks[index].displayName as NSString).pathExtension
-        let extensionName = (raw as NSString).pathExtension
-        let base = extensionName.isEmpty
-            ? raw : (raw as NSString).deletingPathExtension
-        let allowed = CharacterSet.alphanumerics.union(
-            CharacterSet(charactersIn: "._- ()[]")
-        )
-        let cleanBase = String(base.unicodeScalars.map {
-            allowed.contains($0) ? Character($0) : "_"
-        }).trimmingCharacters(in: CharacterSet(charactersIn: " ."))
-        guard !cleanBase.isEmpty else {
-            statusMessage = "文件名不能为空"
-            return
-        }
-        let ext = extensionName.isEmpty
-            ? existingExtension : extensionName
-        let safeExtension = String(ext.unicodeScalars.map {
-            CharacterSet.alphanumerics.contains($0) ? Character($0) : "_"
-        })
-        let renamed = String(cleanBase.prefix(140)) +
-            (safeExtension.isEmpty ? "" : "." + safeExtension)
+        let renamed = requested
         let otherNames = Set(tasks.filter { $0.id != task.id }
             .map { $0.remoteFileName.lowercased() })
         var remoteName = renamed
         var sequence = 2
         while otherNames.contains(remoteName.lowercased()) {
-            let stem = (renamed as NSString).deletingPathExtension
-            let suffix = (renamed as NSString).pathExtension
-            remoteName = stem + " (\(sequence))" +
-                (suffix.isEmpty ? "" : "." + suffix)
+            remoteName = FileMannShareFileNaming.addingDuplicateSuffix(
+                to: renamed, number: sequence
+            )
             sequence += 1
         }
         tasks[index].displayName = renamed
@@ -827,16 +811,51 @@ final class ArchiveViewModel: ObservableObject {
 
                     do {
                         let snapshot = tasks[index]
-                        let sourceURL = try resolveBookmark(snapshot.bookmark)
-                        let finalPath = service.desiredRemotePath(for: snapshot)
-
-                        if await service.remoteFileSize(atPath: finalPath) != nil {
+                        if snapshot.isShareStaging == true &&
+                            !FileMannShareFileNaming.isReliableOriginalFilename(
+                                snapshot.displayName
+                            ) {
                             tasks[index].state = .failed
                             tasks[index].errorMessage =
-                                "NAS 上已存在同路径但未通过 byte-to-byte 重复校验的文件"
+                                "该相册分享任务的原文件名不可确认（旧版可能生成了占位名），" +
+                                "请先使用“修改上传文件名”填写真实文件名，不会擅自改名"
                             continue
                         }
+                        let sourceURL = try resolveBookmark(snapshot.bookmark)
 
+                        // Keep the exact source filename unless the NAS
+                        // already has an entry at the destination. Preserve
+                        // every Unicode character, space and extension case.
+                        let sourceName = snapshot.remoteRelativePath.map {
+                            ($0 as NSString).lastPathComponent
+                        } ?? snapshot.displayName
+                        let relativeDirectory = snapshot.remoteRelativePath.map {
+                            ($0 as NSString).deletingLastPathComponent
+                        }
+                        var candidate = snapshot
+                        var finalPath = service.desiredRemotePath(for: candidate)
+                        var suffix = 2
+                        while await service.remoteFileSize(atPath: finalPath) != nil {
+                            guard suffix <= 10000 else {
+                                throw WebDAVArchiveError.remoteConflict(sourceName)
+                            }
+                            let nextName = FileMannShareFileNaming
+                                .addingDuplicateSuffix(to: sourceName, number: suffix)
+                            candidate.remoteFileName = nextName
+                            if let relativeDirectory {
+                                candidate.remoteRelativePath =
+                                    relativeDirectory.isEmpty ||
+                                    relativeDirectory == "."
+                                    ? nextName
+                                    : (relativeDirectory as NSString)
+                                        .appendingPathComponent(nextName)
+                            }
+                            finalPath = service.desiredRemotePath(for: candidate)
+                            suffix += 1
+                        }
+
+                        tasks[index].remoteFileName = candidate.remoteFileName
+                        tasks[index].remoteRelativePath = candidate.remoteRelativePath
                         try await service.prepareParentDirectory(for: finalPath)
 
                         let partialPath = uploadMode == .atomicMove
@@ -864,7 +883,11 @@ final class ArchiveViewModel: ObservableObject {
                         )
 
                         tasks[index].state = .uploading
-                        tasks[index].errorMessage = "iOS 后台上传中"
+                        tasks[index].errorMessage = candidate.remoteFileName ==
+                            snapshot.displayName
+                            ? "iOS 后台上传中 · 保留原文件名"
+                            : "iOS 后台上传中 · 重名后缀：" +
+                                candidate.remoteFileName
                         scheduled += 1
                     } catch {
                         tasks[index].state = isSourceAccessError(error)
@@ -1423,17 +1446,12 @@ final class ArchiveViewModel: ObservableObject {
     private func uniqueRemoteName(for original: String) -> String {
         let existing = Set(tasks.map { $0.remoteFileName.lowercased() })
         guard existing.contains(original.lowercased()) else { return original }
-
-        let url = URL(fileURLWithPath: original)
-        let ext = url.pathExtension
-        let base = url.deletingPathExtension().lastPathComponent
-
         var counter = 2
         while true {
-            let candidate = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
-            if !existing.contains(candidate.lowercased()) {
-                return candidate
-            }
+            let candidate = FileMannShareFileNaming.addingDuplicateSuffix(
+                to: original, number: counter
+            )
+            if !existing.contains(candidate.lowercased()) { return candidate }
             counter += 1
         }
     }

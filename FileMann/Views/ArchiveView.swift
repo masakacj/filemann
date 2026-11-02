@@ -303,6 +303,13 @@ private struct ArchiveTaskRow: View {
                 .font(.caption)
             }
 
+            if task.remoteFileName != task.displayName {
+                Text("NAS 最终文件名：\(task.remoteFileName)")
+                    .font(.caption)
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+            }
+
             if let url = task.remoteAbsoluteURL {
                 HStack(alignment: .top) {
                     Text("NAS：\(url)")

@@ -40,9 +40,9 @@ final class FileMannShareGroupTests: XCTestCase {
             ).isEmpty
         )
     }
-    func testPhotosSourceFilenameOverridesGenericSuggestedName() {
+    func testPhotosSourceFilenameOverridesGenericSuggestedName() throws {
         XCTAssertEqual(
-            FileMannShareFileNaming.preferredName(
+            try FileMannShareFileNaming.preferredName(
                 suggestedName: "shared-media.mp4",
                 sourceFilename: "IMG_3847.MOV",
                 typeIdentifier: "com.apple.quicktime-movie"
@@ -50,7 +50,7 @@ final class FileMannShareGroupTests: XCTestCase {
             "IMG_3847.MOV"
         )
         XCTAssertEqual(
-            FileMannShareFileNaming.preferredName(
+            try FileMannShareFileNaming.preferredName(
                 suggestedName: "IMG_1024",
                 sourceFilename: "IMG_1024.HEIC",
                 typeIdentifier: "public.heic"
@@ -59,36 +59,83 @@ final class FileMannShareGroupTests: XCTestCase {
         )
     }
 
-    func testPhotosPreferredNameIsKeptWhenAvailable() {
+    func testPhotosOriginalUnicodePunctuationSpacesAndCasePreserved() throws {
+        let original = "夜🌸 热门 %20 [甲] #!+ (1) .MP4"
         XCTAssertEqual(
-            FileMannShareFileNaming.preferredName(
-                suggestedName: "旅行 视频 01.MP4",
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: original,
                 sourceFilename: "temporary-file.mp4",
                 typeIdentifier: "public.mpeg-4"
             ),
-            "旅行 视频 01.MP4"
+            original
+        )
+        let chinese = "原始 视频🥰（高清）.MOV"
+        XCTAssertEqual(
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: "shared-media.mp4",
+                sourceFilename: chinese,
+                typeIdentifier: "public.mpeg-4"
+            ),
+            chinese
         )
     }
 
-    func testGenericProviderNameUsesUniqueReadableFallback() {
-        let first = FileMannShareFileNaming.preferredName(
-            suggestedName: "shared-media.mp4",
-            sourceFilename: "shared-media.mp4",
-            typeIdentifier: "public.mpeg-4",
-            now: Date(timeIntervalSince1970: 0),
-            token: UUID(uuidString: "AAAA0000-0000-0000-0000-000000000000")!
+    func testGenericProviderNameNeverCreatesFakeOriginal() {
+        XCTAssertThrowsError(
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: "shared-media.mp4",
+                sourceFilename: "shared-media.mp4",
+                typeIdentifier: "public.mpeg-4"
+            )
         )
-        let next = FileMannShareFileNaming.preferredName(
-            suggestedName: "shared-media.mp4",
-            sourceFilename: "shared-media.mp4",
-            typeIdentifier: "public.mpeg-4",
-            now: Date(timeIntervalSince1970: 0),
-            token: UUID(uuidString: "BBBB0000-0000-0000-0000-000000000000")!
+        XCTAssertThrowsError(
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: nil,
+                sourceFilename: "CEDCA419-DA02-4AF2-BC00-DEFCA8E283C1.mp4",
+                typeIdentifier: "public.mpeg-4"
+            )
         )
-        XCTAssertTrue(first.hasPrefix("VID_"))
-        XCTAssertTrue(first.hasSuffix(".mp4"))
-        XCTAssertNotEqual(first, next)
-        XCTAssertFalse(first.contains("shared-media"))
+        XCTAssertThrowsError(
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: "IMG_1000",
+                sourceFilename: "temporary-file.mp4",
+                typeIdentifier: "public.mpeg-4"
+            )
+        )
+        XCTAssertFalse(FileMannShareFileNaming.isReliableOriginalFilename(
+            "VID_20261102_120000_1234ABCD.mp4"
+        ))
+    }
+
+    func testDuplicateSuffixOnlyAndBeforeOriginalExtension() {
+        XCTAssertEqual(
+            FileMannShareFileNaming.addingDuplicateSuffix(
+                to: "原始 视频🥰（高清）.MOV", number: 2
+            ),
+            "原始 视频🥰（高清） (2).MOV"
+        )
+        XCTAssertEqual(
+            FileMannShareFileNaming.addingDuplicateSuffix(
+                to: "夜🌸 热门 %20 [甲] #!+.MP4", number: 3
+            ),
+            "夜🌸 热门 %20 [甲] #!+ (3).MP4"
+        )
+        XCTAssertEqual(
+            FileMannShareFileNaming.addingDuplicateSuffix(
+                to: "无扩展名", number: 2
+            ),
+            "无扩展名 (2)"
+        )
+    }
+
+    func testFilenameWithPathSeparatorsRejectedRatherThanSanitized() {
+        XCTAssertThrowsError(
+            try FileMannShareFileNaming.preferredName(
+                suggestedName: "original/name.mp4",
+                sourceFilename: nil,
+                typeIdentifier: "public.mpeg-4"
+            )
+        )
     }
 
     func testShareStagingPreservesResolvedOriginalName() throws {
@@ -111,6 +158,28 @@ final class FileMannShareGroupTests: XCTestCase {
             try Data(contentsOf: received),
             try Data(contentsOf: original)
         )
+    }
+
+    func testShareStagingKeepsExactUnicodeOriginalBytes() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let originalName = "🎞️ 原始影片 #1 %20.MP4"
+        let original = folder.appendingPathComponent(originalName)
+        let payload = Data("media contents".utf8)
+        try payload.write(to: original)
+        let staged = try FileMannShareFileNaming.stage(
+            sourceURL: original,
+            suggestedName: originalName,
+            typeIdentifier: "public.mpeg-4",
+            in: folder
+        )
+        XCTAssertTrue(staged.lastPathComponent.hasSuffix("__" + originalName))
+        XCTAssertEqual(try Data(contentsOf: staged), payload)
     }
 
     func testLegacyArchiveTaskDecodesWithoutReceiptFields() throws {
