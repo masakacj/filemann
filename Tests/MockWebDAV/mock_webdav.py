@@ -139,6 +139,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         path = self._path()
+        if path == "/Album/phantom.mp4":
+            # A broken reverse proxy can claim HTTP 200 and a plausible
+            # Content-Length while the WebDAV directory has no such file.
+            self._body(b"fake-file-size-only", content_type="video/mp4")
+            return
         data = self.state.files.get(path)
         if data is None:
             self.send_error(404)
