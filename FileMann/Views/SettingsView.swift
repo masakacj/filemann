@@ -865,6 +865,13 @@ private struct WebDAVEndpointEditor: View {
 
     let endpoint: WebDAVEndpointKind
 
+    @State private var inspectedCertificate: WebDAVCertificateInspection?
+    @State private var certificateStatus: String?
+    @State private var certificateLoading = false
+    @State private var verifiedFingerprint = ""
+    @State private var pinnedFingerprint: String?
+    @State private var confirmCertificatePin = false
+
     var body: some View {
         Form {
             Section {
@@ -935,13 +942,209 @@ private struct WebDAVEndpointEditor: View {
                 Text(
                     endpoint == .local
                         ? "本地 WebDAV HTTP 仅限私有局域网地址（例如 192.168.x.x），也可启用 HTTPS。"
-                        : "外网地址必须通过可信 HTTPS 和独立 NAS 最小权限账号访问；SMB 445 不应开放到公网。"
+                        : "外网地址必须通过 HTTPS；对于私有 NAS 自签证书，请先从 NAS 管理界面核对指纹，再单独固定信任。"
                 )
+            }
+
+            if endpoint == .remote {
+                remoteCertificateSection
             }
         }
         .navigationTitle(endpoint.navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
         .preferredColorScheme(.dark)
+        .onAppear { refreshCertificatePin() }
+        .onChange(of: previewURL) { _, _ in
+            inspectedCertificate = nil
+            certificateStatus = nil
+            verifiedFingerprint = ""
+            refreshCertificatePin()
+        }
+        .alert("信任这个 NAS 服务器证书？", isPresented: $confirmCertificatePin) {
+            Button("取消", role: .cancel) {}
+            Button("确认已从 NAS 核对指纹") {
+                saveCertificatePin()
+            }
+        } message: {
+            Text(
+                "仅适用于当前 HTTPS 主机及端口。必须通过可信的 NAS 管理界面或其他独立渠道核对 SHA-256 指纹。证书变化后将重新拒绝连接。"
+            )
+        }
+    }
+
+    private var remoteCertificateSection: some View {
+        Section("远程 HTTPS 证书") {
+            Button {
+                inspectRemoteCertificate()
+            } label: {
+                HStack {
+                    Text("检查服务器证书")
+                    if certificateLoading {
+                        Spacer()
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(certificateLoading)
+
+            if let certificateStatus {
+                Text(certificateStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let inspectedCertificate {
+                LabeledContent("服务器") {
+                    Text("\(inspectedCertificate.host):\(inspectedCertificate.port)")
+                        .font(.caption.monospaced())
+                }
+                LabeledContent("证书主体") {
+                    Text(inspectedCertificate.subject)
+                        .font(.caption)
+                }
+                LabeledContent("SHA-256 指纹") {
+                    Text(inspectedCertificate.formattedFingerprint)
+                        .font(.caption2.monospaced())
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                }
+
+                if inspectedCertificate.systemTrusted {
+                    Label("iOS 已信任该证书", systemImage: "checkmark.shield")
+                        .foregroundStyle(.green)
+                } else {
+                    Label("iOS 未信任：\(inspectedCertificate.reason)",
+                          systemImage: "exclamationmark.shield")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                if !inspectedCertificate.systemTrusted &&
+                    pinnedFingerprint != inspectedCertificate.fingerprint {
+                    Text(
+                        "须与 NAS 管理端显示的 SHA-256 指纹独立核对后才能信任。"
+                        + " 不要仅从此页面复制指纹并确认。"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    TextField(
+                        "输入从 NAS 核对的 SHA-256 指纹",
+                        text: $verifiedFingerprint
+                    )
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+
+                    Button("固定信任已核对的证书") {
+                        confirmCertificatePin = true
+                    }
+                    .disabled(
+                        WebDAVCertificateTrust.normalizeFingerprint(
+                            verifiedFingerprint
+                        ) != inspectedCertificate.fingerprint
+                    )
+                }
+            }
+
+            if let pinnedFingerprint {
+                Label(
+                    "已固定证书：\(pinnedFingerprint.prefix(16))…",
+                    systemImage: "lock.shield"
+                )
+                .font(.caption)
+                Button(role: .destructive) {
+                    forgetCertificatePin()
+                } label: {
+                    Text("撤销证书信任")
+                }
+            }
+        } footer: {
+            Text(
+                "只对当前地址和端口保存证书指纹，不会跳过其他服务器的验证。"
+                + " 更推荐直接为 NAS 安装正确域名、有效期与证书链的 HTTPS 证书。"
+            )
+        }
+    }
+
+    private var remoteEndpoint: (host: String, port: Int)? {
+        guard let url = URL(string: previewURL),
+              url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty else {
+            return nil
+        }
+        return (host, url.port ?? 443)
+    }
+
+    private func refreshCertificatePin() {
+        guard let endpoint = remoteEndpoint else {
+            pinnedFingerprint = nil
+            return
+        }
+        pinnedFingerprint = WebDAVCertificateTrust.pinnedFingerprint(
+            host: endpoint.host, port: endpoint.port
+        )
+    }
+
+    private func inspectRemoteCertificate() {
+        certificateLoading = true
+        certificateStatus = "正在读取 TLS 证书（不发送 NAS 用户名和密码）…"
+        inspectedCertificate = nil
+        verifiedFingerprint = ""
+        let currentURL = previewURL
+        Task {
+            defer { certificateLoading = false }
+            do {
+                let result = try await WebDAVCertificateInspector.inspect(
+                    urlString: currentURL
+                )
+                guard currentURL == previewURL else { return }
+                inspectedCertificate = result
+                certificateStatus = result.systemTrusted
+                    ? "证书链和主机名验证通过。"
+                    : "证书未通过 iOS 系统验证，请与 NAS 端核对指纹。"
+            } catch {
+                certificateStatus = "无法读取服务器证书：" +
+                    error.localizedDescription
+            }
+        }
+    }
+
+    private func saveCertificatePin() {
+        guard let target = remoteEndpoint,
+              let inspectedCertificate,
+              inspectedCertificate.host.caseInsensitiveCompare(
+                  target.host
+              ) == .orderedSame,
+              inspectedCertificate.port == target.port,
+              !inspectedCertificate.systemTrusted,
+              WebDAVCertificateTrust.normalizeFingerprint(
+                  verifiedFingerprint
+              ) == inspectedCertificate.fingerprint else {
+            certificateStatus = "证书指纹或服务器地址已变化，请重新检查"
+            return
+        }
+
+        do {
+            try WebDAVCertificateTrust.save(
+                inspectedCertificate.fingerprint,
+                host: target.host, port: target.port
+            )
+            refreshCertificatePin()
+            certificateStatus = "证书指纹已固定。返回设置后重新测试 WebDAV 连接。"
+            verifiedFingerprint = ""
+        } catch {
+            certificateStatus = "无法保存证书信任：" +
+                error.localizedDescription
+        }
+    }
+
+    private func forgetCertificatePin() {
+        guard let target = remoteEndpoint else { return }
+        WebDAVCertificateTrust.remove(
+            host: target.host, port: target.port
+        )
+        refreshCertificatePin()
+        certificateStatus = "已撤销证书固定信任"
     }
 
     private var titleBinding: Binding<String> {
