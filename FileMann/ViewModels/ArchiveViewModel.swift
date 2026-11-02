@@ -400,8 +400,8 @@ final class ArchiveViewModel: ObservableObject {
                 let service = try await makeReachableWebDAVService()
                 try await service.testConnection()
                 connectionTestMessage =
-                    "WebDAV 写入/重命名/删除测试成功（" +
-                    (activeWebDAVEndpoint ?? "NAS") + "）"
+                    "连接成功（" + (activeWebDAVEndpoint ?? "NAS") +
+                    "）；PUT / MOVE / DELETE 写入权限已验证"
             } catch {
                 connectionTestMessage =
                     "WebDAV 连接或写入测试失败（" +
