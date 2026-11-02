@@ -54,26 +54,18 @@ struct SettingsView: View {
                     Text("从 config.781751.xyz 读取 filemann 专属 NAS 配置，固定密码仅存本机 Keychain。离线时保留上次成功配置。")
                 }
 
-                Section("传输方式") {
-                    Picker(
-                        "协议",
-                        selection: $viewModel.settings.transport
-                    ) {
-                        ForEach(ArchiveTransport.allCases) { mode in
-                            Text(mode.title)
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                Section("唯一传输协议") {
+                    LabeledContent("协议", value: "WebDAV")
+                    Text(
+                        "家中优先连接局域网 NAS；外出仅使用可信 HTTPS 地址。"
+                        + " 不开放 SMB 445 端口到互联网。"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
-                if viewModel.settings.transport == .webDAV {
-                    webDAVConnections
-                    webDAVArchiveOptions
-                } else {
-                    smbSection
-                    smbArchiveOptions
-                }
+                webDAVConnections
+                webDAVArchiveOptions
 
                 connectionTestSection
 
@@ -232,7 +224,7 @@ struct SettingsView: View {
             Text("WebDAV")
         } footer: {
             Text(
-                "FileMann 始终优先尝试本地连接；本地不可达时自动切换远程连接。用户名和密码由两个地址共用。"
+                "优先局域网 WebDAV；本地不可达时尝试远程 HTTPS。外网必须有有效证书，不允许通过 HTTP 或忽略证书错误连接。"
             )
         }
     }
@@ -242,10 +234,10 @@ struct SettingsView: View {
             HStack {
                 Image(systemName: "folder")
                 Text(
-                    viewModel.settings
-                        .normalizedWebDAVDirectory
-                        .isEmpty
-                        ? "/"
+                    viewModel.settings.normalizedWebDAVDirectory.isEmpty
+                        ? (viewModel.settings.hasWebDAVArchiveDirectory
+                            ? "（WebDAV 共享根）"
+                            : "/（NAS 根目录不可直接上传）")
                         : "/\(viewModel.settings.normalizedWebDAVDirectory)"
                 )
                 .font(.body.monospaced())
@@ -286,7 +278,7 @@ struct SettingsView: View {
             Text("归档")
         } footer: {
             Text(
-                "归档目录相对于当前 WebDAV 根路径。上传完成后会再次核对 NAS 文件数量和字节数，通过后才按设置删除本地副本。"
+                "如 WebDAV URL 已包含共享根（如 /Public），归档子目录可以留空。若只是 NAS 根目录 /，必须选可写共享目录。上传前执行临时文件 PUT/MOVE/DELETE 权限验证。"
             )
         }
     }
@@ -363,11 +355,10 @@ struct SettingsView: View {
                     )
             }
         } footer: {
-            if viewModel.settings.transport == .webDAV {
-                Text(
-                    "会在所选归档目录写入、重命名、删除一个临时文件，以验证 PUT / MOVE / DELETE 权限。WebDAV 服务路径与归档子目录不要重复填写共享文件夹名；远程连接建议使用可信 HTTPS。"
-                )
-            }
+            Text(
+                "实际上传前会先验证 PUT / MOVE / DELETE 权限。"
+                + " 目录可读取不代表可写；若发生 HTTP 403，将显示失败操作与路径。"
+            )
         }
     }
 
@@ -917,16 +908,19 @@ private struct WebDAVEndpointEditor: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
-                Toggle(
-                    "HTTPS",
-                    isOn: httpsBinding
-                )
-
-                if httpsBinding.wrappedValue {
+                if endpoint == .local {
                     Toggle(
-                        "兼容自签/无效证书",
-                        isOn: invalidCertificateBinding
+                        "HTTPS",
+                        isOn: httpsBinding
                     )
+                    if httpsBinding.wrappedValue {
+                        Toggle(
+                            "兼容自签/无效证书",
+                            isOn: invalidCertificateBinding
+                        )
+                    }
+                } else {
+                    LabeledContent("安全要求", value: "HTTPS / 有效证书")
                 }
             }
 
@@ -940,8 +934,8 @@ private struct WebDAVEndpointEditor: View {
             } footer: {
                 Text(
                     endpoint == .local
-                        ? "本地地址用于家中局域网，支持自定义端口。若 NAS 使用自签证书或证书与 IP 不匹配，可开启“兼容自签/无效证书”。"
-                        : "远程地址用于外网访问，优先使用有效 HTTPS 证书。只有确认这是你自己的 NAS 时，才建议开启“兼容自签/无效证书”。"
+                        ? "本地 WebDAV HTTP 仅限私有局域网地址（例如 192.168.x.x），也可启用 HTTPS。"
+                        : "外网地址必须通过可信 HTTPS 和独立 NAS 最小权限账号访问；SMB 445 不应开放到公网。"
                 )
             }
         }
