@@ -8,6 +8,7 @@ enum WebDAVArchiveError: LocalizedError {
     case forbidden(operation: String, path: String)
     case duplicateArchiveDirectory(base: String, directory: String)
     case missingArchiveDestination
+    case archiveDirectoryMissing(String)
     case remoteConflict(String)
     case remoteVerificationFailed
     case sourceUnavailable
@@ -27,11 +28,25 @@ enum WebDAVArchiveError: LocalizedError {
             let target = path.isEmpty || path.hasPrefix("/")
                 ? (path.isEmpty ? "/" : path)
                 : "/\(path)"
-            return "WebDAV 拒绝\(operation)（HTTP 403）：\(target)。请核对共享文件夹路径与账号权限；通过远程代理访问时，还需确认代理允许该请求方法。"
+            let hint: String
+            if operation.contains("MKCOL") || operation.contains("创建目录") {
+                hint = "NAS 拒绝创建文件夹。请在 WebDAV 根目录选择已存在的共享文件夹；SMB 的 storage/Documentsf/Apps 不一定是 WebDAV 路径。"
+            } else if operation.contains("PUT") || operation.contains("写入") {
+                hint = "NAS 允许读取但拒绝写入。请检查 WebDAV 账号对该目标文件夹的写入权限，以及代理是否放行 PUT。"
+            } else if operation.contains("MOVE") || operation.contains("重命名") {
+                hint = "NAS 允许上传但拒绝 MOVE 重命名，请检查 WebDAV 服务器及反向代理的 MOVE 权限。"
+            } else if operation.contains("DELETE") {
+                hint = "NAS 拒绝 DELETE，请检查归档文件夹的删除权限或代理方法限制。"
+            } else {
+                hint = "请检查账号权限、WebDAV 共享根路径和反向代理规则。"
+            }
+            return "WebDAV \(operation) 被拒绝（HTTP 403）：\(target)。\(hint)"
         case .duplicateArchiveDirectory(let base, let directory):
             return "WebDAV 路径重复：服务地址已包含 \(base)，归档子目录又包含 \(directory)。请将共享名或目录前缀只填写一次，以免 PUT/MKCOL 被拒绝。"
         case .missingArchiveDestination:
             return "WebDAV 当前仅指向 NAS 根目录 /，不能直接上传。请先在共享目录中选择可写文件夹，或将服务 URL 配置为包含共享名的路径（例如 /Public）。"
+        case .archiveDirectoryMissing(let path):
+            return "WebDAV 归档目录不存在（HTTP 404）：/\(path)。请从 WebDAV 根目录重新浏览并选择实际存在的文件夹，不要沿用 SMB 共享路径。"
         case .remoteConflict(let name):
             return "NAS 上已存在同路径文件：\(name)"
         case .remoteVerificationFailed:
@@ -245,22 +260,33 @@ final class WebDAVArchiveService {
             request.setValue("Basic \(token)", forHTTPHeaderField: "Authorization")
         }
 
-        let (_, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw WebDAVArchiveError.invalidResponse
         }
         guard [200, 207].contains(http.statusCode) else {
             throw WebDAVArchiveError.unexpectedStatus(http.statusCode)
         }
+
+        // Some HTTP web servers return 200 HTML to every method (for
+        // example Portainer or an incorrectly routed reverse proxy).
+        // Do not mistake them for writable WebDAV endpoints.
+        let resources = try WebDAVMultiStatusParser(data: data).parse()
+        guard !resources.isEmpty else {
+            throw WebDAVArchiveError.invalidResponse
+        }
     }
 
     /// The WebDAV root URL and the archive directory must not both include
     /// the same share/path prefix. nPlayer can browse a share-root URL, but
     /// appending that path twice makes writes target a different location.
-    private func ensureNoDuplicatedArchivePrefix() throws {
+    private func ensureNoDuplicatedArchivePrefix(
+        for remoteDirectory: String? = nil
+    ) throws {
         let base = baseURL.path
             .split(separator: "/").map { String($0).lowercased() }
-        let directory = settings.normalizedWebDAVDirectory
+        let directory = (remoteDirectory ??
+            settings.normalizedWebDAVDirectory)
             .split(separator: "/").map { String($0).lowercased() }
         guard !base.isEmpty, !directory.isEmpty else { return }
         let limit = min(base.count, directory.count)
@@ -268,7 +294,8 @@ final class WebDAVArchiveService {
             if Array(base.suffix(count)) == Array(directory.prefix(count)) {
                 throw WebDAVArchiveError.duplicateArchiveDirectory(
                     base: baseURL.path,
-                    directory: settings.normalizedWebDAVDirectory
+                    directory: remoteDirectory ??
+                        settings.normalizedWebDAVDirectory
                 )
             }
         }
@@ -281,18 +308,46 @@ final class WebDAVArchiveService {
     }
 
     func testConnection() async throws {
+        // Check the exact directory before ever attempting to create it.
+        // A stale SMB path must not lead to MKCOL attempts on the NAS root.
         let directory = settings.normalizedWebDAVDirectory
+        try await verifyWritableDirectory(at: directory)
+    }
+
+    /// Side-effect-limited probe for an *existing* WebDAV folder. Used both
+    /// by the directory picker and by transfer preflight. On success, the
+    /// only remote mutations are a unique temporary file's PUT/MOVE/DELETE.
+    /// The original NAS media and iPhone media are never changed.
+    func verifyWritableDirectory(at path: String) async throws {
+        let directory = normalize(path)
         let shareRoot = baseURL.path
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard !directory.isEmpty || !shareRoot.isEmpty else {
             throw WebDAVArchiveError.missingArchiveDestination
         }
 
-        try await connectAndPrepare()
-        _ = try await propfind(path: directory, depth: "0")
-        // A share-root URL (such as /Public) is already the destination.
-        // An empty relative directory here is valid and must still undergo
-        // PUT/MOVE/DELETE testing rather than being treated as read-only.
+        try ensureNoDuplicatedArchivePrefix(for: directory)
+        let url = remoteURL(for: directory)
+        do {
+            let response = try await propfind(path: directory, depth: "0")
+            let resources = try WebDAVMultiStatusParser(
+                data: response
+            ).parse()
+            guard resources.contains(where: { $0.isCollection }) else {
+                throw WebDAVArchiveError.invalidResponse
+            }
+        } catch WebDAVArchiveError.unexpectedStatus(let code)
+            where code == 404 {
+            throw WebDAVArchiveError.archiveDirectoryMissing(
+                url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            )
+        } catch WebDAVArchiveError.unexpectedStatus(let code)
+            where code == 403 {
+            throw WebDAVArchiveError.forbidden(
+                operation: "PROPFIND 读取归档目录",
+                path: url.path
+            )
+        }
         try await verifyWriteOperations(in: directory)
     }
 
@@ -373,7 +428,7 @@ final class WebDAVArchiveService {
            http.statusCode == 403 {
             throw WebDAVArchiveError.forbidden(
                 operation: action + "（" + method + "）",
-                path: path
+                path: remoteURL(for: path).path
             )
         }
         try validate(response, accepted: accepted)
@@ -884,8 +939,8 @@ final class WebDAVArchiveService {
 
             if http.statusCode == 403 {
                 throw WebDAVArchiveError.forbidden(
-                    operation: "创建目录",
-                    path: current
+                    operation: "创建目录（MKCOL）",
+                    path: remoteURL(for: current).path
                 )
             }
 

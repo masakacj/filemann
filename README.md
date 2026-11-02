@@ -9,7 +9,8 @@ FileMann 现在仅使用 **WebDAV** 进行 NAS 浏览和归档：局域网 WebDA
 - 公网禁止暴露 SMB TCP 445、NetBIOS 137–139，也不建议公网直连 NAS 管理界面；优先采用 VPN / Zero Trust 私有访问。
 - 如必须提供公网 WebDAV，仅通过可信 TLS 证书的 HTTPS 反向代理连接，并配置独立归档账号、最小读写权限、限制登录尝试次数与日志告警；对 FileMann 需支持 PROPFIND、PUT、MOVE、DELETE 等方法。
 - 本地 HTTP 仅在私有 LAN 地址上允许；公网连接始终强制 HTTPS。对于自有 NAS 的不受信任证书，可在“远程 WebDAV → 高级”明确同意启用**仅对此 NAS URL 生效**的证书兼容模式；修改地址时自动撤销，默认关闭。兼容模式无法防范中间人攻击，请仅在你确认的 NAS 上使用。也可以保留严格校验并通过 SHA-256 指纹固定信任单张服务器证书。
-- 同步前在实际归档目录写入、重命名、删除随机临时测试文件。**目录能列出不代表可以上传。**
+- 选择归档文件夹时须从 **WebDAV 根目录**浏览，点击“验证写入并选择”：仅在该现有目录成功完成独立临时文件的 PUT、MOVE、DELETE 后才保存。此前从 SMB 共享继承的 `storage/Documentsf/Apps` 不能视作有效 WebDAV 路径；配置中心已撤回未经验证的 `192.168.233.233:8900` 和该 SMB 目录默认值。
+- 同步前会再次验证目标文件夹写入权限，并明确指出 403 发生于 PROPFIND、MKCOL、PUT、MOVE 还是 DELETE。**目录能列出不代表可以上传。**
 - iOS 后台 URLSession 可接管文件上传，但 NAS 若不支持 HTTP resumable upload，网络中断后的重试可能需要重传完整文件；当前不能保证字节级续传。URLSession 也可能创建上传临时副本，完成后由系统回收。
 - NAS 私密账号及外网地址只保存在个人配置中心，不能写进 GitHub。
 

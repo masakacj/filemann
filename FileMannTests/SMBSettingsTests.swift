@@ -257,6 +257,50 @@ final class SMBSettingsTests: XCTestCase {
         try await service.testConnection()
     }
 
+    func testSelectExistingWebDAVFolderWithoutSMBPath() async throws {
+        // The stale server-side SMB path must not be assumed to exist on DAV.
+        let service = try mockWebDAVService(
+            directory: "storage/Documentsf/Apps"
+        )
+        do {
+            try await service.testConnection()
+            XCTFail("An SMB-only path must not trigger automatic MKCOL")
+        } catch WebDAVArchiveError.archiveDirectoryMissing(let path) {
+            XCTAssertEqual(path, "storage/Documentsf/Apps")
+        }
+
+        // The user may instead choose a browsable, writable DAV folder.
+        try await service.verifyWritableDirectory(at: "Album")
+    }
+
+    func testSelectReadOnlyDAVDirectoryReturnsActionable403() async throws {
+        let service = try mockWebDAVService(directory: "ReadOnly")
+        do {
+            try await service.verifyWritableDirectory(at: "ReadOnly")
+            XCTFail("A read-only NAS folder must never be selected")
+        } catch WebDAVArchiveError.forbidden(let operation, let path) {
+            XCTAssertTrue(operation.contains("PUT"))
+            XCTAssertTrue(path.contains("/ReadOnly/"))
+        }
+    }
+
+    func testRejectNonWebDAVHTTP200HTMLProxyResponse() async throws {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "127.0.0.1"
+        settings.webDAVLocalPort = "8765"
+        settings.webDAVLocalPath = "/NotWebDAV"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVUsername = "filemann"
+        do {
+            _ = try await WebDAVArchiveService.resolveBestBaseURL(
+                settings: settings, password: "filemann-pass"
+            )
+            XCTFail("HTML 200 must not be mistaken for a DAV PROPFIND")
+        } catch {
+            // A real WebDAV multistatus is required to select an endpoint.
+        }
+    }
+
     func testWriteCheckReportsForbiddenPUT() async throws {
         let service = try mockWebDAVService(directory: "ReadOnly")
 
@@ -265,7 +309,7 @@ final class SMBSettingsTests: XCTestCase {
             XCTFail("A read-only directory must fail the write check")
         } catch WebDAVArchiveError.forbidden(let operation, let path) {
             XCTAssertTrue(operation.contains("PUT"))
-            XCTAssertTrue(path.hasPrefix("ReadOnly/"))
+            XCTAssertTrue(path.contains("/ReadOnly/"))
         }
     }
 

@@ -393,6 +393,26 @@ final class ArchiveViewModel: ObservableObject {
         return try await service.listDirectories(at: path)
     }
 
+    /// Check a selected WebDAV directory before saving it as the archive
+    /// destination. Never attempt to create the SMB share or a guessed root.
+    func verifyWebDAVArchiveDirectory(at path: String) async throws {
+        let service = try await makeReachableWebDAVService()
+        do {
+            try await service.verifyWritableDirectory(at: path)
+        } catch {
+            throw NSError(
+                domain: "FileMann.WebDAV.WritePermission",
+                code: (error as NSError).code,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "目标地址：\(service.baseURLString)" +
+                        (path.isEmpty ? "/" : "/\(path)") +
+                        "\n\(error.localizedDescription)"
+                ]
+            )
+        }
+    }
+
     func testConnection() {
         connectionTestMessage = "连接中…"
         Task {
