@@ -116,4 +116,44 @@ final class WebDAVCertificateTrustTests: XCTestCase {
         )
         XCTAssertEqual(resolved, "https://127.0.0.1:8767")
     }
+    func testOptionalRemoteNASCompatibilityConnectsWithoutPin()
+        async throws {
+        let host = "127.0.0.1"
+        let port = 8767
+        WebDAVCertificateTrust.remove(host: host, port: port)
+
+        var settings = SMBSettings()
+        settings.webDAVUsername = "filemann"
+        settings.webDAVRemoteHost = host
+        settings.webDAVRemotePort = String(port)
+        settings.webDAVRemoteHTTPS = true
+
+        do {
+            _ = try await WebDAVArchiveService.resolveBestBaseURL(
+                settings: settings, password: "filemann-pass"
+            )
+            XCTFail("Default must reject untrusted TLS")
+        } catch {
+            // Safe default: no explicit opt-in.
+        }
+
+        settings.enableRemoteCertificateCompatibility()
+        let restored = try JSONDecoder().decode(
+            SMBSettings.self, from: JSONEncoder().encode(settings)
+        )
+        XCTAssertTrue(restored.isRemoteCertificateCompatibilityEnabled)
+        XCTAssertEqual(
+            try await WebDAVArchiveService.resolveBestBaseURL(
+                settings: restored, password: "filemann-pass"
+            ),
+            "https://127.0.0.1:8767"
+        )
+
+        var changed = restored
+        changed.webDAVRemotePort = "8766"
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+        changed.disableRemoteCertificateCompatibility()
+        XCTAssertFalse(changed.isRemoteCertificateCompatibilityEnabled)
+    }
+
 }
