@@ -1097,11 +1097,12 @@ final class ArchiveViewModel: ObservableObject {
                                 peer.attemptedRemotePath == finalPath &&
                                 peer.verifiedAt == nil
                             }
-                            let existsOnNAS = reservedInBatch
-                                ? false
-                                : await service.remoteFileSize(
+                            var existsOnNAS = false
+                            if !reservedInBatch {
+                                existsOnNAS = await service.remoteFileSize(
                                     atPath: finalPath
                                 ) != nil
+                            }
                             if !reservedInBatch && !existsOnNAS {
                                 break
                             }
