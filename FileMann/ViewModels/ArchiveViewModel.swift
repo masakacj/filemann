@@ -22,6 +22,7 @@ final class ArchiveViewModel: ObservableObject {
     @Published var connectionTestMessage: String?
     @Published var bytesPerSecond: Double = 0
     @Published var activeWebDAVEndpoint: String?
+    @Published var usesLocalLANTransfer = false
     @Published var configCenterPassword = KeychainStore.loadConfigCenterPassword()
     @Published var configCenterStatus: String?
     @Published var isConfigCenterSyncing = false
@@ -2064,6 +2065,9 @@ final class ArchiveViewModel: ObservableObject {
             settings: settings,
             password: webDAVPassword,
             baseURLString: resolved
+        )
+        usesLocalLANTransfer = WebDAVUploadSchedulingPolicy.usesLocalLAN(
+            endpoint: service.baseURLString, settings: settings
         )
         let endpoint = URL(string: service.baseURLString)
         let port = endpoint?.port.map { ":\($0)" } ?? ""
