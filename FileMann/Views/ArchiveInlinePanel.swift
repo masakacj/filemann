@@ -6,6 +6,7 @@ struct ArchiveInlinePanel: View {
     @AppStorage("filemann.archive.panel.expanded")
     private var isExpanded = true
     @State private var isConfirmingClearAll = false
+    @State private var showOnlyUnnamed = false
 
     var body: some View {
         if !viewModel.tasks.isEmpty {
@@ -137,8 +138,29 @@ struct ArchiveInlinePanel: View {
 
                 if isExpanded {
                     Divider()
+                    if viewModel.unresolvedShareNamesCount > 0 {
+                        HStack(spacing: 8) {
+                            Label(
+                                "\(viewModel.unresolvedShareNamesCount) 项待确认文件名",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            Spacer()
+                            Button(
+                                showOnlyUnnamed ? "显示全部" : "只看待命名"
+                            ) {
+                                showOnlyUnnamed.toggle()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .font(.caption)
+                    }
 
-                    ForEach(viewModel.tasks) { task in
+                    ForEach(showOnlyUnnamed
+                        ? viewModel.tasks.filter {
+                            $0.needsShareFilenameDecision
+                        }
+                        : viewModel.tasks) { task in
                         ArchiveInlineTaskRow(task: task)
                             .environmentObject(viewModel)
                     }
