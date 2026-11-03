@@ -195,26 +195,18 @@ final class ShareViewController: UIViewController {
             batchProgress.progress =
                 Float(index) / Float(max(1, providers.count))
 
-            // Prefer the actual media representation, not a generic
-            // converted image or an unsupported text/file attachment.
-            let supported = provider.registeredTypeIdentifiers.filter {
-                guard let kind = UTType($0) else { return false }
-                return kind.conforms(to: .movie) ||
-                    kind.conforms(to: .image)
-            }
-            let identifier = supported.first {
-                $0 != UTType.image.identifier &&
-                    $0 != UTType.movie.identifier
-            } ?? supported.first
-            guard let identifier else {
+            // Prefer public.heic/public.heif over a compatibility JPEG
+            // even if Photos registered the JPEG representation first.
+            guard FileMannMediaRepresentation.preferredTypeIdentifier(
+                from: provider.registeredTypeIdentifiers
+            ) != nil else {
                 summary.unsupported += 1
                 continue
             }
 
             do {
-                let staged = try await stageMedia(
+                let staged = try await FileMannMediaRepresentation.stageProvider(
                     provider,
-                    typeIdentifier: identifier,
                     selectionIndex: processed,
                     inbox: inbox
                 )
@@ -238,61 +230,4 @@ final class ShareViewController: UIViewController {
         return summary
     }
 
-    /// NSItemProvider URLs may be invalid as soon as their callback returns.
-    /// Resolve the real source filename and stage the file *inside* the
-    /// callback. Photos providers that do not offer an in-place URL can
-    /// still supply a temporary file representation.
-    private func stageMedia(
-        _ provider: NSItemProvider,
-        typeIdentifier: String,
-        selectionIndex: Int,
-        inbox: URL
-    ) async throws -> URL {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<URL, Error>) in
-
-            provider.loadInPlaceFileRepresentation(
-                forTypeIdentifier: typeIdentifier
-            ) { url, _, _ in
-                if let url {
-                    do {
-                        let stored = try FileMannShareFileNaming.stageForQueue(
-                            sourceURL: url,
-                            suggestedName: provider.suggestedName,
-                            typeIdentifier: typeIdentifier,
-                            selectionIndex: selectionIndex,
-                            in: inbox
-                        )
-                        continuation.resume(returning: stored)
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                    return
-                }
-
-                provider.loadFileRepresentation(
-                    forTypeIdentifier: typeIdentifier
-                ) { temporaryURL, error in
-                    guard let temporaryURL else {
-                        continuation.resume(
-                            throwing: error ?? ShareError.providerFailed
-                        )
-                        return
-                    }
-                    do {
-                        let stored = try FileMannShareFileNaming.stageForQueue(
-                            sourceURL: temporaryURL,
-                            suggestedName: provider.suggestedName,
-                            typeIdentifier: typeIdentifier,
-                            selectionIndex: selectionIndex,
-                            in: inbox
-                        )
-                        continuation.resume(returning: stored)
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        }
-    }
 }
