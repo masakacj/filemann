@@ -124,6 +124,10 @@ final class ArchiveViewModel: ObservableObject {
         duplicateCandidates.filter { $0.decision == .unresolved }.count
     }
 
+    var unresolvedShareNamesCount: Int {
+        tasks.filter { $0.needsShareFilenameDecision }.count
+    }
+
     /// Imports shared-file references into the persistent queue without
     /// copying their bytes into FileMann's private media library.
     func importShareInbox() {
@@ -1007,7 +1011,12 @@ final class ArchiveViewModel: ObservableObject {
 
                 if scheduled > 0 || tasks.contains(where: { $0.state == .uploading }) {
                     statusMessage = "已交给 iOS 后台上传；可以锁屏或切换到其他 App"
+                } else if unresolvedShareNamesCount > 0 {
+                    isRunning = false
+                    statusMessage = "有 \(unresolvedShareNamesCount) 项待确认文件名，" +
+                        "请在列表里选择“自定义文件名”或“使用占位名”"
                 } else {
+                    isRunning = false
                     await finishWebDAVBatchIfPossible()
                 }
             } catch is CancellationError {
