@@ -47,6 +47,20 @@ final class ArchiveViewModel: ObservableObject {
         self.password = KeychainStore.loadPassword()
         self.webDAVPassword = KeychainStore.loadWebDAVPassword()
 
+        // Older app versions may have already queued synthetic share names.
+        // Do not silently upload them before the user chooses a filename.
+        for index in tasks.indices {
+            if tasks[index].isShareStaging == true,
+               tasks[index].state != .completed,
+               tasks[index].state != .skipped,
+               tasks[index].shareFilenameDecision == nil,
+               !FileMannShareFileNaming.isReliableOriginalFilename(
+                    tasks[index].displayName
+               ) {
+                tasks[index].shareFilenameDecision = .pending
+            }
+        }
+
         if tasks.contains(where: {
             $0.state == .completed && $0.verifiedAt == nil
         }) {
@@ -152,6 +166,11 @@ final class ArchiveViewModel: ObservableObject {
                 let displayName = parts.count > 1
                     ? parts.dropFirst().joined(separator: "__")
                     : fileKey
+                let metadata = FileMannShareFileNaming.readMetadata(for: url)
+                let requiresNaming = metadata?.needsFilenameDecision ??
+                    FileMannShareFileNaming.isGeneratedPlaceholderName(
+                        displayName
+                    )
                 let bookmark = try url.bookmarkData(
                     options: .minimalBookmark,
                     includingResourceValuesForKeys: nil,
@@ -166,6 +185,9 @@ final class ArchiveViewModel: ObservableObject {
                     sourceModifiedAt: values.contentModificationDate
                 )
                 task.isShareStaging = true
+                task.shareSelectionIndex = metadata?.selectionIndex
+                task.shareFilenameDecision = requiresNaming
+                    ? .pending : .original
                 tasks.append(task)
                 added += 1
             } catch {
@@ -177,7 +199,11 @@ final class ArchiveViewModel: ObservableObject {
         guard added > 0 else { return }
         invalidateVerification()
         persistTasks()
-        statusMessage = "已从相册分享导入 \(added) 项到持久化队列"
+        let unnamed = tasks.filter { $0.needsShareFilenameDecision }.count
+        statusMessage = "已从相册分享导入 \(added) 项；" +
+            (unnamed > 0
+                ? "\(unnamed) 项尚未确认文件名，请按相册序号和预览选择名称"
+                : "已加入持久化队列")
     }
 
     func addDocuments(_ urls: [URL]) {
