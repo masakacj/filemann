@@ -140,6 +140,17 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
     }
 }
 
+extension ArchiveTask {
+    /// This is evaluated only after the entire NAS manifest passes strict
+    /// endpoint/path/size verification. "Keep NAS" is an explicit request to
+    /// remove the phone copy even when automatic deletion is disabled.
+    func shouldCleanupLocalCopy(defaultDeleteAfterArchive: Bool) -> Bool {
+        isShareStaging == true ||
+            shouldDeleteSource == true ||
+            (defaultDeleteAfterArchive && shouldDeleteSource != false)
+    }
+}
+
 struct SourceLocation: Identifiable, Codable, Equatable {
     let id: UUID
     var bookmark: Data
@@ -191,6 +202,45 @@ struct DuplicateCandidate: Identifiable, Codable, Equatable {
         self.remoteName = remoteName
         self.fileSize = fileSize
         self.decision = .unresolved
+    }
+}
+
+/// Bulk duplicate choices must affect only candidates whose archive action
+/// has not yet been executed. Never rewrite completed or skipped records:
+/// a previous "keep phone" action may already have deleted its NAS copy.
+enum DuplicateBatchSelection {
+    private static func pendingTaskIDs(
+        _ tasks: [ArchiveTask]
+    ) -> Set<UUID> {
+        Set(tasks.filter {
+            [.queued, .paused, .failed, .missingSource].contains($0.state)
+        }.map(\.id))
+    }
+
+    static func selectableKeepNASCount(
+        candidates: [DuplicateCandidate],
+        tasks: [ArchiveTask]
+    ) -> Int {
+        let eligible = pendingTaskIDs(tasks)
+        return candidates.filter {
+            eligible.contains($0.taskID) && $0.decision != .keepNAS
+        }.count
+    }
+
+    @discardableResult
+    static func selectKeepNAS(
+        candidates: inout [DuplicateCandidate],
+        tasks: [ArchiveTask]
+    ) -> Int {
+        let eligible = pendingTaskIDs(tasks)
+        var changed = 0
+        for index in candidates.indices
+            where eligible.contains(candidates[index].taskID) &&
+                  candidates[index].decision != .keepNAS {
+            candidates[index].decision = .keepNAS
+            changed += 1
+        }
+        return changed
     }
 }
 
