@@ -142,7 +142,9 @@ struct DuplicateReviewView: View {
     }
 }
 
-private struct FileThumbnailView: View {
+/// Reusable preview of a staged photo/video, including unnamed Photos
+/// shares that need identification by thumbnail rather than filename.
+struct FileThumbnailView: View {
     let bookmark: Data
     @State private var image: UIImage?
 
