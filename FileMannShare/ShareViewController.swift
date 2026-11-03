@@ -17,6 +17,7 @@ final class ShareViewController: UIViewController {
     private struct ShareImportSummary {
         var received: Int
         var imported = 0
+        var awaitingNames = 0
         var unsupported = 0
         var failed = 0
         var firstErrors: [String] = []
@@ -129,6 +130,7 @@ final class ShareViewController: UIViewController {
                         .joined(separator: "\n")
                     info.text =
                         "已暂存 \(summary.imported)/\(summary.received) 项；" +
+                        "其中 \(summary.awaitingNames) 项待确认文件名；" +
                         "失败 \(summary.failed) 项、不支持 \(summary.unsupported) 项。" +
                         (detail.isEmpty ? "" : "\n" + detail) +
                         "\n已暂存内容不会因关闭面板丢失；" +
@@ -143,7 +145,10 @@ final class ShareViewController: UIViewController {
                     return
                 }
 
-                info.text = "已加入 \(summary.imported) 项到持久化队列。打开 FileMann 后可查看和启动传输。"
+                info.text = "已加入 \(summary.imported) 项到持久化队列，" +
+                    "其中 \(summary.awaitingNames) 项待确认文件名。" +
+                    "打开 FileMann 可根据相册序号和缩略图自定义名称，" +
+                    "或选择使用临时占位文件名。"
                 extensionContext?.completeRequest(
                     returningItems: [], completionHandler: nil
                 )
@@ -207,12 +212,18 @@ final class ShareViewController: UIViewController {
             }
 
             do {
-                _ = try await stageMedia(
+                let staged = try await stageMedia(
                     provider,
                     typeIdentifier: identifier,
+                    selectionIndex: processed,
                     inbox: inbox
                 )
                 summary.imported += 1
+                if FileMannShareFileNaming.readMetadata(
+                    for: staged
+                )?.needsFilenameDecision == true {
+                    summary.awaitingNames += 1
+                }
             } catch {
                 summary.failed += 1
                 if summary.firstErrors.count < 3 {
@@ -234,6 +245,7 @@ final class ShareViewController: UIViewController {
     private func stageMedia(
         _ provider: NSItemProvider,
         typeIdentifier: String,
+        selectionIndex: Int,
         inbox: URL
     ) async throws -> URL {
         try await withCheckedThrowingContinuation {
@@ -244,10 +256,11 @@ final class ShareViewController: UIViewController {
             ) { url, _, _ in
                 if let url {
                     do {
-                        let stored = try FileMannShareFileNaming.stage(
+                        let stored = try FileMannShareFileNaming.stageForQueue(
                             sourceURL: url,
                             suggestedName: provider.suggestedName,
                             typeIdentifier: typeIdentifier,
+                            selectionIndex: selectionIndex,
                             in: inbox
                         )
                         continuation.resume(returning: stored)
@@ -267,10 +280,11 @@ final class ShareViewController: UIViewController {
                         return
                     }
                     do {
-                        let stored = try FileMannShareFileNaming.stage(
+                        let stored = try FileMannShareFileNaming.stageForQueue(
                             sourceURL: temporaryURL,
                             suggestedName: provider.suggestedName,
                             typeIdentifier: typeIdentifier,
+                            selectionIndex: selectionIndex,
                             in: inbox
                         )
                         continuation.resume(returning: stored)
