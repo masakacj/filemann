@@ -1015,7 +1015,15 @@ final class ArchiveViewModel: ObservableObject {
                     guard WebDAVUploadSchedulingPolicy.canSchedule(
                         fileSize: tasks[index].fileSize,
                         inFlightSizes: inFlightSizes
-                    ) else { break }
+                    ) else {
+                        if inFlightSizes.contains(tasks[index].fileSize) {
+                            // Two same-sized media need an intervening
+                            // NAS duplicate check; other distinct HEICs
+                            // can be handed to the daemon already.
+                            continue
+                        }
+                        break
+                    }
 
                     let taskID = tasks[index].id
                     if existingTaskIDs.contains(taskID) {
