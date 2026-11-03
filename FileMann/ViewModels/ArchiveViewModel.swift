@@ -1539,7 +1539,7 @@ final class ArchiveViewModel: ObservableObject {
         if recovered > 0 {
             invalidateVerification()
             statusMessage =
-                "已从中断的后台传输恢复 \\(recovered) 项，" +
+                "已从中断的后台传输恢复 \(recovered) 项，" +
                 "均通过原上传端点的文件路径和大小校验"
         }
     }
