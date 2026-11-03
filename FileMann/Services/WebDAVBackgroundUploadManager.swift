@@ -18,15 +18,39 @@ private struct BackgroundUploadDescriptor: Codable {
 
 final class WebDAVBackgroundUploadManager: NSObject {
     static let shared = WebDAVBackgroundUploadManager()
+    // Retain the original identifier so tasks submitted by older versions
+    // are still reattached and finished after an in-place upgrade.
     static let sessionIdentifier = "com.masakacj.filemann.webdav.background"
+    static let localSessionIdentifier =
+        "com.masakacj.filemann.webdav.background.local"
+    static let remoteSessionIdentifier =
+        "com.masakacj.filemann.webdav.background.remote"
+    private static let supportedSessionIdentifiers: Set<String> = [
+        sessionIdentifier, localSessionIdentifier, remoteSessionIdentifier
+    ]
 
-    private var backgroundCompletionHandler: (() -> Void)?
+    private var backgroundCompletionHandlers: [String: () -> Void] = [:]
     // Do not tell UIKit that all background callbacks have been processed
     // while an asynchronous NAS MOVE + parent PROPFIND is still running.
     private let pendingFinalizations = DispatchGroup()
     private let finalizingLock = NSLock()
     private var finalizingTaskIDs = Set<UUID>()
-    private lazy var session: URLSession = makeSession()
+
+    private lazy var legacySession: URLSession = makeSession(
+        identifier: Self.sessionIdentifier,
+        maximumConnections: WebDAVUploadSchedulingPolicy.maximumWANHTTPConnections
+    )
+    private lazy var localSession: URLSession = makeSession(
+        identifier: Self.localSessionIdentifier,
+        maximumConnections: WebDAVUploadSchedulingPolicy.maximumLANHTTPConnections
+    )
+    private lazy var remoteSession: URLSession = makeSession(
+        identifier: Self.remoteSessionIdentifier,
+        maximumConnections: WebDAVUploadSchedulingPolicy.maximumWANHTTPConnections
+    )
+    private var allSessions: [URLSession] {
+        [legacySession, localSession, remoteSession]
+    }
 
     private override init() {
         super.init()
@@ -40,7 +64,8 @@ final class WebDAVBackgroundUploadManager: NSObject {
         finalPath: String,
         expectedBytes: Int64,
         baseURLString: String,
-        uploadMode: WebDAVUploadMode
+        uploadMode: WebDAVUploadMode,
+        usesLocalLAN: Bool
     ) throws {
         let descriptor = BackgroundUploadDescriptor(
             taskID: taskID,
@@ -67,54 +92,63 @@ final class WebDAVBackgroundUploadManager: NSObject {
             throw WebDAVArchiveError.sourceUnavailable
         }
 
-        let upload = session.uploadTask(with: request, fromFile: sourceURL)
+        let uploadSession = usesLocalLAN ? localSession : remoteSession
+        let upload = uploadSession.uploadTask(with: request, fromFile: sourceURL)
         upload.taskDescription = description
         upload.resume()
     }
 
-    func suspendAll() {
-        session.getAllTasks { tasks in
-            tasks.forEach { $0.suspend() }
-        }
-    }
-
-    func resumeAll() {
-        session.getAllTasks { tasks in
-            tasks.forEach { $0.resume() }
-        }
-    }
-
-    /// Cancel every FileMann WebDAV background task before clearing
-    /// the local queue. Never issues NAS DELETE or touches Photos originals.
-    func cancelAll() {
-        session.getAllTasks { tasks in
-            tasks.forEach { $0.cancel() }
-        }
-    }
-
-    func cancel(taskID: UUID) {
-        session.getAllTasks { tasks in
-            for task in tasks {
-                guard let descriptor = self.descriptor(for: task),
-                      descriptor.taskID == taskID else {
-                    continue
-                }
-                task.cancel()
+    private func forEachSubmittedTask(
+        _ action: @escaping (URLSessionTask) -> Void
+    ) {
+        for session in allSessions {
+            session.getAllTasks { tasks in
+                tasks.forEach(action)
             }
         }
     }
 
-    func activeTaskIDs() async -> Set<UUID> {
-        let tasks: [URLSessionTask] = await withCheckedContinuation {
-            continuation in
-            session.getAllTasks { continuation.resume(returning: $0) }
+    func suspendAll() {
+        forEachSubmittedTask { $0.suspend() }
+    }
+
+    func resumeAll() {
+        forEachSubmittedTask { $0.resume() }
+    }
+
+    /// Cancels all current and legacy FileMann URLSession uploads only.
+    /// This never deletes NAS or Photos originals.
+    func cancelAll() {
+        forEachSubmittedTask { $0.cancel() }
+    }
+
+    func cancel(taskID: UUID) {
+        forEachSubmittedTask { task in
+            guard self.descriptor(for: task)?.taskID == taskID else {
+                return
+            }
+            task.cancel()
         }
-        // URLSession removes an upload task before its asynchronous NAS
-        // MOVE/PROPFIND finalization finishes. Treat it as in-flight until
-        // the verified receipt is written, so the next staged HEIC cannot
-        // bypass equal-size duplicate checks.
-        return Set(tasks.compactMap { descriptor(for: $0)?.taskID })
-            .union(pendingFinalizingIDs())
+    }
+
+    func activeTaskIDs() async -> Set<UUID> {
+        var active = pendingFinalizingIDs()
+        for session in allSessions {
+            let ids: Set<UUID> = await withCheckedContinuation {
+                continuation in
+                session.getAllTasks { tasks in
+                    let ids = Set(tasks.compactMap {
+                        self.descriptor(for: $0)?.taskID
+                    })
+                    continuation.resume(returning: ids)
+                }
+            }
+            active.formUnion(ids)
+        }
+        // The system can remove a PUT task before its MOVE/PROPFIND
+        // finishes. Keep it in-flight until a verified receipt exists.
+        active.formUnion(pendingFinalizingIDs())
+        return active
     }
 
     private func pendingFinalizingIDs() -> Set<UUID> {
@@ -137,34 +171,36 @@ final class WebDAVBackgroundUploadManager: NSObject {
     /// Lazy session construction alone is insufficient on a background
     /// relaunch because the UI might never be presented.
     func reconnectBackgroundSession() {
-        _ = session
+        // Re-create all identifiers: the system may wake either new session,
+        // or the original pre-upgrade session, without displaying SwiftUI.
+        _ = allSessions
     }
 
     func setBackgroundCompletionHandler(
         identifier: String,
         completionHandler: @escaping () -> Void
     ) {
-        guard identifier == Self.sessionIdentifier else {
+        guard Self.supportedSessionIdentifiers.contains(identifier) else {
             completionHandler()
             return
         }
-        backgroundCompletionHandler = completionHandler
-        // Apple requires the same session identifier to be re-created
-        // before it can replay completion/credential delegate events.
+        backgroundCompletionHandlers[identifier] = completionHandler
         reconnectBackgroundSession()
     }
 
-    private func makeSession() -> URLSession {
+    private func makeSession(
+        identifier: String,
+        maximumConnections: Int
+    ) -> URLSession {
         let settings = TaskStore.loadSettings()
         let configuration = URLSessionConfiguration.background(
-            withIdentifier: Self.sessionIdentifier
+            withIdentifier: identifier
         )
         configuration.sessionSendsLaunchEvents = true
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
         configuration.allowsCellularAccess = !settings.webDAVWiFiOnly
-        configuration.httpMaximumConnectionsPerHost =
-            WebDAVUploadSchedulingPolicy.maximumHTTPConnections
+        configuration.httpMaximumConnectionsPerHost = maximumConnections
         configuration.timeoutIntervalForResource = 60 * 60 * 24 * 7
 
         let queue = OperationQueue()
@@ -432,9 +468,13 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        guard let identifier = session.configuration.identifier else {
+            return
+        }
         pendingFinalizations.notify(queue: .main) {
-            let handler = self.backgroundCompletionHandler
-            self.backgroundCompletionHandler = nil
+            let handler = self.backgroundCompletionHandlers.removeValue(
+                forKey: identifier
+            )
             handler?()
         }
     }
