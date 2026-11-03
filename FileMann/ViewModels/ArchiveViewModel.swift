@@ -1419,12 +1419,10 @@ final class ArchiveViewModel: ObservableObject {
 
             switch receipt.outcome {
             case .verified:
-                guard let endpoint = receipt.endpoint,
+                guard receipt.matchesVerifiedUpload(tasks[index]),
+                      let endpoint = receipt.endpoint,
                       let remotePath = receipt.remotePath,
-                      let bytes = receipt.remoteSize,
-                      bytes == tasks[index].fileSize,
-                      endpoint == tasks[index].remoteEndpointURL,
-                      remotePath == tasks[index].attemptedRemotePath else {
+                      let bytes = receipt.remoteSize else {
                     // Do not reuse a stale receipt after a rename, changed
                     // endpoint or newly queued transfer under the same ID.
                     WebDAVBackgroundReceiptStore.remove(
