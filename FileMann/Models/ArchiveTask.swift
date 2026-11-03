@@ -27,6 +27,14 @@ enum ArchiveCompletionKind: String, Codable {
     case alreadyOnNAS
 }
 
+/// Optional so tasks persisted by older FileMann releases decode unchanged.
+enum ShareFilenameDecision: String, Codable {
+    case original
+    case pending
+    case userRenamed
+    case placeholderApproved
+}
+
 struct ArchiveTask: Identifiable, Codable, Equatable {
     let id: UUID
     var bookmark: Data
@@ -37,6 +45,13 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
     var sourceRelativePath: String?
     /// Disposable App Group share staging; never a Photos library original.
     var isShareStaging: Bool?
+    var shareSelectionIndex: Int?
+    var shareFilenameDecision: ShareFilenameDecision?
+
+    var needsShareFilenameDecision: Bool {
+        shareFilenameDecision == .pending
+    }
+
     var remoteVerifiedPath: String?
     /// Exact WebDAV base used by the upload, including its URL path prefix.
     /// Never infer this from a later local/WAN fallback.
@@ -61,6 +76,9 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
     }
 
     var completionDescription: String {
+        if needsShareFilenameDecision {
+            return "待确认文件名"
+        }
         if completionKind == .alreadyOnNAS {
             return "复用 NAS 已有副本，未新增文件"
         }
@@ -104,6 +122,8 @@ struct ArchiveTask: Identifiable, Codable, Equatable {
         self.sourceLocationID = sourceLocationID
         self.sourceRelativePath = sourceRelativePath
         self.isShareStaging = nil
+        self.shareSelectionIndex = nil
+        self.shareFilenameDecision = nil
         self.remoteVerifiedPath = nil
         self.remoteEndpointURL = nil
         self.attemptedRemotePath = nil
