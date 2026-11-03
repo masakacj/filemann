@@ -84,6 +84,93 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
         )
     }
 
+    func testProbedPrivateLANUsesFourConnectionsWhileWANUsesTwo() {
+        var settings = SMBSettings()
+        settings.webDAVLocalHost = "192.168.233.233"
+        settings.webDAVLocalPort = "8900"
+        settings.webDAVLocalHTTPS = false
+        settings.webDAVRemoteHost = "nas.example.com"
+        settings.webDAVRemoteHTTPS = true
+
+        XCTAssertTrue(
+            WebDAVUploadSchedulingPolicy.usesLocalLAN(
+                endpoint: settings.normalizedWebDAVBaseURL, settings: settings
+            )
+        )
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.usesLocalLAN(
+                endpoint: settings.normalizedWebDAVRemoteBaseURL,
+                settings: settings
+            )
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.maximumLANHTTPConnections, 4
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.maximumWANHTTPConnections, 2
+        )
+    }
+
+    func testLANMediumFilesCanOverlapWithinStagingBudget() {
+        let first: Int64 = 24 * 1024 * 1024
+        let second = first + 1
+        XCTAssertTrue(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: second, inFlightSizes: [first], isLocalLAN: true
+            )
+        )
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: second, inFlightSizes: [first], isLocalLAN: false
+            )
+        )
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: second + 1,
+                inFlightSizes: [first, second],
+                isLocalLAN: true
+            )
+        )
+    }
+
+    func testSameSizedLANFilesNeedDifferentContentFingerprints() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = root.appendingPathComponent("a.heic")
+        let two = root.appendingPathComponent("b.heic")
+        try Data("ABC".utf8).write(to: one)
+        try Data("XYZ".utf8).write(to: two)
+        let digestOne = try ArchiveSourceFingerprint.sha256(
+            of: one, expectedBytes: 3
+        )
+        let digestTwo = try ArchiveSourceFingerprint.sha256(
+            of: two, expectedBytes: 3
+        )
+        XCTAssertNotEqual(digestOne, digestTwo)
+        XCTAssertEqual(
+            digestOne,
+            try ArchiveSourceFingerprint.sha256(of: one, expectedBytes: 3)
+        )
+        XCTAssertThrowsError(
+            try ArchiveSourceFingerprint.sha256(of: one, expectedBytes: 4)
+        )
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: 3, inFlightSizes: [3], isLocalLAN: true
+            )
+        )
+        XCTAssertTrue(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: 3, inFlightSizes: [3], isLocalLAN: true,
+                verifiedDifferentContentAtSameSize: true
+            )
+        )
+    }
+
     func testBatchManifestChecksLiveListingAndIgnoresPhantomHead() async throws {
         let service = try mockWebDAVService(directory: "Album")
         let existing = try await service.downloadData(

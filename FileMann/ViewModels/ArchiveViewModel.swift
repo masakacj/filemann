@@ -22,6 +22,7 @@ final class ArchiveViewModel: ObservableObject {
     @Published var connectionTestMessage: String?
     @Published var bytesPerSecond: Double = 0
     @Published var activeWebDAVEndpoint: String?
+    @Published var usesLocalLANTransfer = false
     @Published var configCenterPassword = KeychainStore.loadConfigCenterPassword()
     @Published var configCenterStatus: String?
     @Published var isConfigCenterSyncing = false
@@ -43,6 +44,10 @@ final class ArchiveViewModel: ObservableObject {
     private var webDAVBatchSettings: SMBSettings?
     private var webDAVBatchPassword: String?
     private var checkedDuplicateTaskIDs = Set<UUID>()
+    // Only hash small/medium same-sized files that could overlap on LAN.
+    // A byte-identical local peer must wait for NAS verification and the
+    // duplicate-review flow; size alone is not proof of identical content.
+    private var sourceFingerprintCache: [UUID: Data] = [:]
     private var webDAVScheduling = false
     private var webDAVRefillRequested = false
     private var isRecoveringOnForeground = false
@@ -57,6 +62,7 @@ final class ArchiveViewModel: ObservableObject {
         webDAVBatchSettings = nil
         webDAVBatchPassword = nil
         checkedDuplicateTaskIDs.removeAll()
+        sourceFingerprintCache.removeAll()
         lastProgressUIUpdate.removeAll()
         webDAVRefillRequested = false
     }
@@ -977,7 +983,17 @@ final class ArchiveViewModel: ObservableObject {
                 }
                 guard generation == queueGeneration else { return }
 
-                let foundNewDuplicates = try await scanForDuplicates(using: service)
+                let manager = WebDAVBackgroundUploadManager.shared
+                let existingTaskIDs = await manager.activeTaskIDs()
+                guard generation == queueGeneration else { return }
+
+                // Restored URLSession tasks are already being written to
+                // the NAS. Do not re-open their source media or perform a
+                // global duplicate scan on their behalf.
+                let foundNewDuplicates = try await scanForDuplicates(
+                    using: service,
+                    excludingTaskIDs: existingTaskIDs
+                )
                 guard generation == queueGeneration else { return }
                 if foundNewDuplicates || unresolvedDuplicateCount > 0 {
                     isShowingDuplicateReview = true
@@ -989,15 +1005,17 @@ final class ArchiveViewModel: ObservableObject {
                 try await applyResolvedDuplicates(using: service)
                 guard generation == queueGeneration else { return }
 
-                let manager = WebDAVBackgroundUploadManager.shared
-                let existingTaskIDs = await manager.activeTaskIDs()
-                guard generation == queueGeneration else { return }
                 manager.resumeAll()
 
-                // Two small image uploads overlap WebDAV round trips.
-                // Large videos remain strictly serial to bound the
-                // background session's additional iOS staging copies.
+                // The probed LAN endpoint gets four HTTP slots; WAN gets
+                // two. iOS owns the pre-staged uploads while suspended.
+                // Multiple medium LAN files may overlap within the same
+                // 160 MiB staging budget; >64 MiB stays exclusive.
+                let usesLocalLAN = WebDAVUploadSchedulingPolicy.usesLocalLAN(
+                    endpoint: service.baseURLString, settings: settings
+                )
                 var scheduled = 0
+                var inFlightIDs = existingTaskIDs
                 var inFlightSizes = tasks.filter {
                     existingTaskIDs.contains($0.id)
                 }.map(\.fileSize)
@@ -1012,14 +1030,26 @@ final class ArchiveViewModel: ObservableObject {
                             "源文件大小为 0，已跳过空文件；不会阻塞其他媒体上传"
                         continue
                     }
+                    let hasSameSizeInFlight = inFlightSizes.contains(
+                        tasks[index].fileSize
+                    )
+                    let differentSameSizedSource = usesLocalLAN &&
+                        hasSameSizeInFlight &&
+                        tasks[index].fileSize <=
+                            WebDAVUploadSchedulingPolicy.largeFileThresholdBytes &&
+                        canOverlapSameSizeOnLAN(
+                            candidate: tasks[index], inFlightIDs: inFlightIDs
+                        )
                     guard WebDAVUploadSchedulingPolicy.canSchedule(
                         fileSize: tasks[index].fileSize,
-                        inFlightSizes: inFlightSizes
+                        inFlightSizes: inFlightSizes,
+                        isLocalLAN: usesLocalLAN,
+                        verifiedDifferentContentAtSameSize:
+                            differentSameSizedSource
                     ) else {
-                        if inFlightSizes.contains(tasks[index].fileSize) {
-                            // Two same-sized media need an intervening
-                            // NAS duplicate check; other distinct HEICs
-                            // can be handed to the daemon already.
+                        if hasSameSizeInFlight {
+                            // Identical or unreadable equal-sized media
+                            // must wait for a new NAS duplicate check.
                             continue
                         }
                         break
@@ -1057,7 +1087,26 @@ final class ArchiveViewModel: ObservableObject {
                         var candidate = snapshot
                         var finalPath = service.desiredRemotePath(for: candidate)
                         var suffix = 2
-                        while await service.remoteFileSize(atPath: finalPath) != nil {
+                        while true {
+                            // Concurrent PUTs must not claim the same final
+                            // name before either remote file exists. Reserve
+                            // the paths already owned by current tasks.
+                            let reservedInBatch = tasks.contains { peer in
+                                peer.id != snapshot.id &&
+                                [.uploading, .paused].contains(peer.state) &&
+                                peer.remoteEndpointURL == service.baseURLString &&
+                                peer.attemptedRemotePath == finalPath &&
+                                peer.verifiedAt == nil
+                            }
+                            var existsOnNAS = false
+                            if !reservedInBatch {
+                                existsOnNAS = await service.remoteFileSize(
+                                    atPath: finalPath
+                                ) != nil
+                            }
+                            if !reservedInBatch && !existsOnNAS {
+                                break
+                            }
                             guard suffix <= 10000 else {
                                 throw WebDAVArchiveError.remoteConflict(sourceName)
                             }
@@ -1102,7 +1151,8 @@ final class ArchiveViewModel: ObservableObject {
                             finalPath: finalPath,
                             expectedBytes: snapshot.fileSize,
                             baseURLString: service.baseURLString,
-                            uploadMode: uploadMode
+                            uploadMode: uploadMode,
+                            usesLocalLAN: usesLocalLAN
                         )
 
                         tasks[index].state = .uploading
@@ -1112,6 +1162,7 @@ final class ArchiveViewModel: ObservableObject {
                             : "iOS 后台上传中 · 重名后缀：" +
                                 candidate.remoteFileName
                         scheduled += 1
+                        inFlightIDs.insert(taskID)
                         inFlightSizes.append(snapshot.fileSize)
                     } catch {
                         tasks[index].state = isSourceAccessError(error)
@@ -1143,16 +1194,63 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
-    private func scanForDuplicates(using service: WebDAVArchiveService) async throws -> Bool {
+    /// Calculate content signatures only for equal-sized LAN contenders.
+    /// This permits parallel photos with the same size, but never queues
+    /// identical bytes simultaneously before the NAS duplicate review.
+    private func sourceFingerprint(for task: ArchiveTask) throws -> Data {
+        if let cached = sourceFingerprintCache[task.id] {
+            return cached
+        }
+        let sourceURL = try resolveBookmark(task.bookmark)
+        let fingerprint = try ArchiveSourceFingerprint.sha256(
+            of: sourceURL, expectedBytes: task.fileSize
+        )
+        sourceFingerprintCache[task.id] = fingerprint
+        return fingerprint
+    }
+
+    private func canOverlapSameSizeOnLAN(
+        candidate: ArchiveTask,
+        inFlightIDs: Set<UUID>
+    ) -> Bool {
+        let sameSizePeers = tasks.filter {
+            inFlightIDs.contains($0.id) &&
+            $0.fileSize == candidate.fileSize
+        }
+        guard !sameSizePeers.isEmpty else { return false }
+        do {
+            let digest = try sourceFingerprint(for: candidate)
+            for peer in sameSizePeers {
+                if try sourceFingerprint(for: peer) == digest {
+                    return false
+                }
+            }
+            return true
+        } catch {
+            // When a scoped source can no longer be opened, keep the
+            // conservative serial behavior rather than risk duplicates.
+            return false
+        }
+    }
+
+    private func scanForDuplicates(
+        using service: WebDAVArchiveService,
+        excludingTaskIDs activeTaskIDs: Set<UUID> = []
+    ) async throws -> Bool {
         let knownTaskIDs = Set(duplicateCandidates.map(\.taskID))
+        // Completed files are already in the live NAS inventory. Counting
+        // them as pending forced perpetual rechecks on later callbacks.
         let sizeCounts = Dictionary(
-            tasks.filter { $0.state != .skipped }
-                .map { ($0.fileSize, 1) },
+            tasks.filter {
+                [.queued, .uploading, .paused, .failed, .missingSource]
+                    .contains($0.state)
+            }.map { ($0.fileSize, 1) },
             uniquingKeysWith: +
         )
         let candidates = tasks.filter {
             [.queued, .paused, .failed, .missingSource]
                 .contains($0.state) &&
+            !activeTaskIDs.contains($0.id) &&
             !knownTaskIDs.contains($0.id) &&
             !checkedDuplicateTaskIDs.contains($0.id) &&
             !$0.needsShareFilenameDecision
@@ -1967,6 +2065,9 @@ final class ArchiveViewModel: ObservableObject {
             settings: settings,
             password: webDAVPassword,
             baseURLString: resolved
+        )
+        usesLocalLANTransfer = WebDAVUploadSchedulingPolicy.usesLocalLAN(
+            endpoint: service.baseURLString, settings: settings
         )
         let endpoint = URL(string: service.baseURLString)
         let port = endpoint?.port.map { ":\($0)" } ?? ""

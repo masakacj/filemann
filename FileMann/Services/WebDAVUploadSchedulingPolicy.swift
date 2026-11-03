@@ -1,38 +1,74 @@
 import Foundation
 
-/// The iOS background upload daemon can continue tasks that have *already
-/// been submitted* when FileMann is suspended. A two-task foreground-only
-/// refill loop leaves hundreds of HEIC files waiting for the app to wake.
-/// Submit a bounded queue of small media up front; the system still uses at
-/// most two connections and owns the actual background uploads.
-///
-/// URLSession may stage a private temporary copy for each submitted file:
-/// cap aggregate staging to 160 MiB and avoid queueing multiple large files.
+/// URLSession background tasks already handed to iOS can keep transferring
+/// when the app is suspended. Submit a bounded queue of small files in advance,
+/// but use separate background sessions for LAN and WAN connection limits.
 enum WebDAVUploadSchedulingPolicy {
     static let largeFileThresholdBytes: Int64 = 64 * 1024 * 1024
     static let backgroundPrefetchMaxFileBytes: Int64 = 16 * 1024 * 1024
     static let maximumPreparedSmallUploads = 16
     static let maximumPreparedBytes: Int64 = 160 * 1024 * 1024
-    static let maximumHTTPConnections = 2
+    static let maximumLANMediumUploads = 2
+    static let maximumWANHTTPConnections = 2
+    static let maximumLANHTTPConnections = 4
+    // Kept for old call sites and migration tests.
+    static let maximumHTTPConnections = maximumWANHTTPConnections
+
+    /// Only select the faster LAN pipeline after the *working* local URL was
+    /// probed. Being on Wi-Fi alone must not classify an HTTPS WAN fallback
+    /// as local (the two endpoints may expose different WebDAV roots).
+    static func usesLocalLAN(
+        endpoint: String,
+        settings: SMBSettings
+    ) -> Bool {
+        let active = endpoint.trimmingCharacters(
+            in: CharacterSet(charactersIn: "/")
+        )
+        let configuredLocal = settings.normalizedWebDAVBaseURL
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !configuredLocal.isEmpty,
+              active == configuredLocal,
+              let host = URL(string: active)?.host else {
+            return false
+        }
+        return SMBSettings.isPrivateLANHost(host)
+    }
 
     static func canSchedule(
         fileSize: Int64,
-        inFlightSizes: [Int64]
+        inFlightSizes: [Int64],
+        isLocalLAN: Bool = false,
+        verifiedDifferentContentAtSameSize: Bool = false
     ) -> Bool {
         guard fileSize > 0,
               inFlightSizes.count < maximumPreparedSmallUploads,
-              // Equal-size media can be byte-identical. Wait until the
-              // first one is visible on the NAS before processing another.
-              !inFlightSizes.contains(fileSize),
+              (verifiedDifferentContentAtSameSize ||
+               !inFlightSizes.contains(fileSize)),
               !inFlightSizes.contains(where: {
-                  $0 > backgroundPrefetchMaxFileBytes
+                  $0 > largeFileThresholdBytes
               }) else {
             return false
         }
 
-        if fileSize > backgroundPrefetchMaxFileBytes {
-            // MOV, long video or unusually large media: one at a time.
+        if fileSize > largeFileThresholdBytes {
+            // Huge videos stay exclusive, avoiding several multi-GB copies
+            // in the private staging area of the iOS upload daemon.
             return inFlightSizes.isEmpty
+        }
+
+        let mediumInFlight = inFlightSizes.filter {
+            $0 > backgroundPrefetchMaxFileBytes
+        }.count
+        if fileSize > backgroundPrefetchMaxFileBytes {
+            if !isLocalLAN {
+                // Preserve conservative WAN upload behavior.
+                return inFlightSizes.isEmpty
+            }
+            guard mediumInFlight < maximumLANMediumUploads else {
+                return false
+            }
+        } else if !isLocalLAN && mediumInFlight > 0 {
+            return false
         }
 
         let stagedBytes = inFlightSizes.reduce(Int64(0)) { result, size in
