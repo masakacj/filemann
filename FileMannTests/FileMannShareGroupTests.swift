@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 import XCTest
 @testable import FileMann
 
@@ -313,6 +314,165 @@ final class FileMannShareGroupTests: XCTestCase {
             )?.selectionIndex,
             30
         )
+    }
+
+    func testPhotosProviderPrefersHEICEvenWhenJPEGIsRegisteredFirst() {
+        XCTAssertEqual(
+            FileMannMediaRepresentation.preferredTypeIdentifier(
+                from: [
+                    UTType.jpeg.identifier,
+                    UTType.image.identifier,
+                    UTType.heic.identifier,
+                    UTType.png.identifier
+                ]
+            ),
+            UTType.heic.identifier
+        )
+        XCTAssertEqual(
+            FileMannMediaRepresentation.preferredTypeIdentifier(
+                from: [
+                    UTType.jpeg.identifier,
+                    UTType.heif.identifier
+                ]
+            ),
+            UTType.heif.identifier
+        )
+        XCTAssertEqual(
+            FileMannMediaRepresentation.preferredTypeIdentifier(
+                from: [UTType.jpeg.identifier, UTType.image.identifier]
+            ),
+            UTType.jpeg.identifier
+        )
+        XCTAssertNil(FileMannMediaRepresentation.preferredTypeIdentifier(
+            from: ["public.plain-text"]
+        ))
+    }
+
+    func testActualHEICBytesAreNotJPEG() throws {
+        let heicHeader = Data(
+            [0, 0, 0, 24] + Array("ftypheic".utf8) +
+            Array(repeating: UInt8(0), count: 16)
+        )
+        XCTAssertEqual(
+            FileMannMediaRepresentation.signature(of: heicHeader),
+            .heic
+        )
+        let jpeg = Data([0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0])
+        XCTAssertEqual(
+            FileMannMediaRepresentation.signature(of: jpeg),
+            .jpeg
+        )
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("IMG_4921.HEIC")
+        try heicHeader.write(to: source)
+        let staged = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: "shared-media.jpeg",
+            typeIdentifier: UTType.heic.identifier,
+            selectionIndex: 29,
+            in: root
+        )
+        XCTAssertTrue(staged.lastPathComponent.hasSuffix("__IMG_4921.HEIC"))
+        XCTAssertEqual(try Data(contentsOf: staged), heicHeader)
+        XCTAssertEqual(
+            FileMannShareFileNaming.readMetadata(
+                for: staged
+            )?.needsFilenameDecision,
+            false
+        )
+    }
+
+    func testHEICBytesKeepRealHEICFilenameDespitePhotosJPGSuggestion() throws {
+        let header = Data(
+            [0, 0, 0, 24] + Array("ftypheic".utf8) +
+            Array(repeating: UInt8(0), count: 8)
+        )
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let source = folder.appendingPathComponent("IMG_0036.HEIC")
+        try header.write(to: source)
+        let stored = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: "IMG_0036.JPG",
+            typeIdentifier: UTType.heic.identifier,
+            selectionIndex: 1,
+            in: folder
+        )
+        XCTAssertTrue(stored.lastPathComponent.hasSuffix("__IMG_0036.HEIC"))
+        XCTAssertFalse(
+            FileMannShareFileNaming.readMetadata(
+                for: stored
+            )?.needsFilenameDecision ?? true
+        )
+    }
+
+    func testConvertedJPEGCannotMasqueradeAsHEIC() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let jpeg = folder.appendingPathComponent("IMG_4921.JPG")
+        try Data([0xFF, 0xD8, 0xFF, 0xE0, 0x11]).write(to: jpeg)
+        XCTAssertThrowsError(try FileMannShareFileNaming.stageForQueue(
+            sourceURL: jpeg,
+            suggestedName: "IMG_4921.HEIC",
+            typeIdentifier: UTType.jpeg.identifier,
+            selectionIndex: 2,
+            in: folder
+        ))
+        XCTAssertThrowsError(try FileMannShareFileNaming.stageForQueue(
+            sourceURL: jpeg,
+            suggestedName: "IMG_4921.HEIC",
+            typeIdentifier: UTType.heic.identifier,
+            selectionIndex: 3,
+            in: folder
+        ))
+    }
+
+    func testHEICWithoutExposedOriginalNameStagesAsHEICPendingDecision() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let unnamed = root.appendingPathComponent("shared-media.heic")
+        let body = Data(
+            [0, 0, 0, 24] + Array("ftypheic".utf8) +
+            Array(repeating: UInt8(0), count: 8)
+        )
+        try body.write(to: unnamed)
+        let staged = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: unnamed,
+            suggestedName: "image.heic",
+            typeIdentifier: UTType.heic.identifier,
+            selectionIndex: 29,
+            in: root
+        )
+        XCTAssertTrue(staged.lastPathComponent.hasSuffix(".heic"))
+        XCTAssertEqual(
+            FileMannShareFileNaming.readMetadata(
+                for: staged
+            )?.needsFilenameDecision,
+            true
+        )
+        XCTAssertEqual(try Data(contentsOf: staged), body)
     }
 
     func testLegacyArchiveTaskDecodesWithoutReceiptFields() throws {
