@@ -886,6 +886,12 @@ final class ArchiveViewModel: ObservableObject {
             return
         }
 
+        if webDAVScheduling {
+            webDAVRefillRequested = true
+            return
+        }
+        webDAVScheduling = true
+
         saveSettings()
 
         for index in tasks.indices {
@@ -898,19 +904,51 @@ final class ArchiveViewModel: ObservableObject {
         }
         persistTasks()
 
+        let wasAlreadyRunning = isRunning
         isRunning = true
-        speedSampleDate = Date()
-        speedSampleBytes = transferredBytes
-        bytesPerSecond = 0
+        if !wasAlreadyRunning {
+            speedSampleDate = Date()
+            speedSampleBytes = transferredBytes
+            bytesPerSecond = 0
+        }
 
         Task {
+            defer {
+                webDAVScheduling = false
+                if webDAVRefillRequested {
+                    webDAVRefillRequested = false
+                    if generation == queueGeneration && isRunning &&
+                        tasks.contains(where: { $0.state == .queued }) {
+                        startWebDAV(retryFailed: false)
+                    }
+                }
+            }
+
             do {
-                let service = try await makeReachableWebDAVService()
-                guard generation == queueGeneration else { return }
-                // Listing a WebDAV folder does not prove PUT/MOVE/DELETE
-                // permissions. Verify real archive writes before iOS stages
-                // an entire video for background upload.
-                let uploadMode = try await service.preferredUploadMode()
+                let service: WebDAVArchiveService
+                let uploadMode: WebDAVUploadMode
+                if let cached = webDAVBatchService,
+                   let cachedMode = webDAVBatchMode,
+                   webDAVBatchSettings == settings,
+                   webDAVBatchPassword == webDAVPassword {
+                    service = cached
+                    uploadMode = cachedMode
+                } else {
+                    resetWebDAVBatchCache()
+                    // Only the first file in a batch needs to prove the
+                    // destination is really writable, via PUT/MOVE/DELETE.
+                    // Every subsequent file reuses the pinned endpoint.
+                    let resolved = try await makeReachableWebDAVService()
+                    guard generation == queueGeneration else { return }
+                    let mode = try await resolved.preferredUploadMode()
+                    guard generation == queueGeneration else { return }
+                    webDAVBatchService = resolved
+                    webDAVBatchMode = mode
+                    webDAVBatchSettings = settings
+                    webDAVBatchPassword = webDAVPassword
+                    service = resolved
+                    uploadMode = mode
+                }
                 guard generation == queueGeneration else { return }
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
@@ -930,18 +968,22 @@ final class ArchiveViewModel: ObservableObject {
                 guard generation == queueGeneration else { return }
                 manager.resumeAll()
 
-                // A background URLSession copies the entire upload file
-                // into iOS temporary storage. Limit simultaneous staging
-                // to one file to avoid filling the phone with duplicate
-                // multi-GB videos.
+                // Two small image uploads overlap WebDAV round trips.
+                // Large videos remain strictly serial to bound the
+                // background session's additional iOS staging copies.
                 var scheduled = 0
-                let capacity = max(0, 1 - existingTaskIDs.count)
+                var inFlightSizes = tasks.filter {
+                    existingTaskIDs.contains($0.id)
+                }.map(\.fileSize)
                 for index in tasks.indices {
                     guard generation == queueGeneration else { return }
-                    guard scheduled < capacity else { break }
                     guard tasks[index].state == .queued else {
                         continue
                     }
+                    guard WebDAVUploadSchedulingPolicy.canSchedule(
+                        fileSize: tasks[index].fileSize,
+                        inFlightSizes: inFlightSizes
+                    ) else { break }
 
                     let taskID = tasks[index].id
                     if existingTaskIDs.contains(taskID) {
@@ -1030,6 +1072,7 @@ final class ArchiveViewModel: ObservableObject {
                             : "iOS 后台上传中 · 重名后缀：" +
                                 candidate.remoteFileName
                         scheduled += 1
+                        inFlightSizes.append(snapshot.fileSize)
                     } catch {
                         tasks[index].state = isSourceAccessError(error)
                             ? .missingSource
