@@ -1086,7 +1086,25 @@ final class ArchiveViewModel: ObservableObject {
                         var candidate = snapshot
                         var finalPath = service.desiredRemotePath(for: candidate)
                         var suffix = 2
-                        while await service.remoteFileSize(atPath: finalPath) != nil {
+                        while true {
+                            // Concurrent PUTs must not claim the same final
+                            // name before either remote file exists. Reserve
+                            // the paths already owned by current tasks.
+                            let reservedInBatch = tasks.contains { peer in
+                                peer.id != snapshot.id &&
+                                [.uploading, .paused].contains(peer.state) &&
+                                peer.remoteEndpointURL == service.baseURLString &&
+                                peer.attemptedRemotePath == finalPath &&
+                                peer.verifiedAt == nil
+                            }
+                            let existsOnNAS = reservedInBatch
+                                ? false
+                                : await service.remoteFileSize(
+                                    atPath: finalPath
+                                ) != nil
+                            if !reservedInBatch && !existsOnNAS {
+                                break
+                            }
                             guard suffix <= 10000 else {
                                 throw WebDAVArchiveError.remoteConflict(sourceName)
                             }
