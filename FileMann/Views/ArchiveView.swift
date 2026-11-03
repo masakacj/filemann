@@ -54,7 +54,7 @@ struct ArchiveView: View {
                             .font(.caption)
                         }
 
-                        ForEach(showOnlyUnnamed
+                        ForEach(showOnlyUnnamed && viewModel.unresolvedShareNamesCount > 0
                             ? viewModel.tasks.filter {
                                 $0.needsShareFilenameDecision
                             }
