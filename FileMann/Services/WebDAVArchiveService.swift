@@ -100,6 +100,9 @@ final class WebDAVArchiveService {
     private let session: URLSession
     private let baseURL: URL
     private var cachedRemoteInventory: [RemoteFileInfo]?
+    // One successful write probe establishes the archive root. Newly
+    // created nested parent folders need only be checked once per batch.
+    private var preparedUploadDirectories = Set<String>()
 
     var baseURLString: String {
         baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -365,7 +368,9 @@ final class WebDAVArchiveService {
                 path: url.path
             )
         }
-        return try await verifyWriteOperations(in: directory)
+        let mode = try await verifyWriteOperations(in: directory)
+        preparedUploadDirectories.insert(directory)
+        return mode
     }
 
     // The connection test must check write/rename/delete permissions, not
@@ -646,7 +651,14 @@ final class WebDAVArchiveService {
 
     func prepareParentDirectory(for remotePath: String) async throws {
         let parent = (normalize(remotePath) as NSString).deletingLastPathComponent
+        // Avoid one redundant PROPFIND per HEIC. The preflight already
+        // verified the configured archive root is writable, and nested
+        // directories only need to be created/checked once in this batch.
+        if preparedUploadDirectories.contains(parent) {
+            return
+        }
         try await ensureDirectory(parent)
+        preparedUploadDirectories.insert(parent)
     }
 
     func makeUploadRequest(
