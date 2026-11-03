@@ -1127,6 +1127,11 @@ final class ArchiveViewModel: ObservableObject {
 
     private func scanForDuplicates(using service: WebDAVArchiveService) async throws -> Bool {
         let knownTaskIDs = Set(duplicateCandidates.map(\.taskID))
+        let sizeCounts = Dictionary(
+            tasks.filter { $0.state != .skipped }
+                .map { ($0.fileSize, 1) },
+            uniquingKeysWith: +
+        )
         let candidates = tasks.filter {
             [.queued, .paused, .failed, .missingSource]
                 .contains($0.state) &&
@@ -1163,10 +1168,13 @@ final class ArchiveViewModel: ObservableObject {
                     found = true
                     persistDuplicates()
                 }
-                // A successful exact scan, including "no duplicate", is
-                // sufficient for this batch. Do not rescan the same HEIC
-                // after every other file completes.
-                checkedDuplicateTaskIDs.insert(task.id)
+                // Unique-sized batch items cannot be byte-identical to
+                // another selected file. Reuse their negative scan; when
+                // sizes repeat, recheck after the first upload publishes,
+                // so intra-batch duplicates still reach review.
+                if sizeCounts[task.fileSize] == 1 {
+                    checkedDuplicateTaskIDs.insert(task.id)
+                }
             } catch WebDAVArchiveError.sourceUnavailable {
                 if let index = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[index].state = .missingSource
