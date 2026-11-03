@@ -16,7 +16,7 @@ enum FileMannMediaRepresentation {
             case .missingMedia:
                 return "分享来源没有提供可读取的照片或视频文件"
             case .convertedHEICToJPEG:
-                return "iOS 提供的是 JPEG 而不是原 HEIC。请在“照片 → 分享 → 选项 → 格式”选择“当前”，或使用 FileMann 内“选择相册原件”。不会将 JPEG 假装成 HEIC 上传。"
+                return "iOS 返回 JPEG 而不是 HEIC 原件。请在“照片 → 分享 → 选项 → 格式”选择“当前”，或在 FileMann“传输”页使用原格式相册导入；若仍只有 JPEG，可先在照片中导出未修改原件到“文件”后再添加。不会将 JPEG 假装成 HEIC 上传。"
             case .mismatchedHEICData:
                 return "收到的文件类型与 HEIC 声明不一致，已阻止错误格式的归档"
             }
