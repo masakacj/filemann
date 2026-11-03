@@ -142,6 +142,15 @@ enum FileMannShareFileNaming {
         selectionIndex: Int,
         in inbox: URL
     ) throws -> URL {
+        // The provider's source may be a security-scoped URL. The signature
+        // probe and the copy must happen while this scope is open.
+        let scoped = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if scoped {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
         // Never label transcoded JPEG bytes as a HEIC original. The share
         // host controls which representations it vends; the extension
         // cannot reverse a JPEG conversion by renaming the file.
