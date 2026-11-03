@@ -1106,9 +1106,10 @@ final class ArchiveViewModel: ObservableObject {
     private func scanForDuplicates(using service: WebDAVArchiveService) async throws -> Bool {
         let knownTaskIDs = Set(duplicateCandidates.map(\.taskID))
         let candidates = tasks.filter {
-            $0.state != .completed &&
-            $0.state != .skipped &&
+            [.queued, .paused, .failed, .missingSource]
+                .contains($0.state) &&
             !knownTaskIDs.contains($0.id) &&
+            !checkedDuplicateTaskIDs.contains($0.id) &&
             !$0.needsShareFilenameDecision
         }
 
@@ -1140,6 +1141,10 @@ final class ArchiveViewModel: ObservableObject {
                     found = true
                     persistDuplicates()
                 }
+                // A successful exact scan, including "no duplicate", is
+                // sufficient for this batch. Do not rescan the same HEIC
+                // after every other file completes.
+                checkedDuplicateTaskIDs.insert(task.id)
             } catch WebDAVArchiveError.sourceUnavailable {
                 if let index = tasks.firstIndex(where: { $0.id == task.id }) {
                     tasks[index].state = .missingSource
@@ -1226,13 +1231,22 @@ final class ArchiveViewModel: ObservableObject {
                 }
 
                 Task { @MainActor in
-                    if let index = self?.tasks.firstIndex(where: { $0.id == taskID }) {
-                        self?.isRunning = true
-                        self?.tasks[index].state = .uploading
-                        self?.tasks[index].errorMessage = "iOS 后台上传中"
+                    guard let self,
+                          let index = self.tasks.firstIndex(where: {
+                              $0.id == taskID
+                          }),
+                          ![ArchiveTaskState.completed, .skipped, .failed]
+                            .contains(self.tasks[index].state) else {
+                        return
                     }
-                    self?.updateProgress(id: taskID, bytes: sent)
-                    self?.persistTasks()
+                    self.isRunning = true
+                    if self.tasks[index].state != .uploading {
+                        self.tasks[index].state = .uploading
+                        self.persistTasks()
+                    }
+                    self.updateProgress(id: taskID, bytes: sent)
+                    // The progress checkpoint is written by updateProgress
+                    // at 1 Hz, not for every URLSession body-data callback.
                 }
             }
         )
@@ -1267,16 +1281,21 @@ final class ArchiveViewModel: ObservableObject {
                         "已在实际上传端点的目录列表中确认文件"
                     self.cleanupShareStaging(at: index)
                     self.persistTasks()
-                    if self.tasks.contains(where: {
-                        $0.state == .queued
-                    }), !self.tasks.contains(where: {
-                        $0.state == .uploading
-                    }) {
-                        self.isRunning = false
-                        self.startWebDAV(retryFailed: false)
-                    } else {
-                        await self.finishWebDAVBatchIfPossible()
+                    // Inventory is only a duplicate-check cache; any
+                    // newly queued file must see the updated NAS listing.
+                    if self.webDAVBatchService?.baseURLString == endpoint {
+                        self.webDAVBatchService?.invalidateRemoteInventory()
                     }
+                    self.lastProgressUIUpdate.removeValue(forKey: taskID)
+                    if self.isRunning && self.tasks.contains(where: {
+                        $0.state == .queued &&
+                        !$0.needsShareFilenameDecision
+                    }) {
+                        // Refill one free small-file upload slot even if
+                        // the other concurrent HEIC is still transferring.
+                        self.startWebDAV(retryFailed: false)
+                    }
+                    await self.finishWebDAVBatchIfPossible()
                 }
             }
         )
@@ -1300,6 +1319,7 @@ final class ArchiveViewModel: ObservableObject {
 
                     self.tasks[index].state = .failed
                     self.tasks[index].errorMessage = "后台上传失败：\(message)"
+                    self.lastProgressUIUpdate.removeValue(forKey: taskID)
                     self.persistTasks()
 
                     if !self.tasks.contains(where: { $0.state == .uploading }) {
@@ -1625,13 +1645,25 @@ final class ArchiveViewModel: ObservableObject {
 
     private func updateProgress(id: UUID, bytes: Int64) {
         guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
-        tasks[index].transferredBytes = min(bytes, tasks[index].fileSize)
-
         let now = Date()
         let elapsed = now.timeIntervalSince(speedSampleDate)
+        let displayedElapsed = now.timeIntervalSince(
+            lastProgressUIUpdate[id] ?? .distantPast
+        )
+        // Coalesce bursts of URLSession progress callbacks; keep the final
+        // 100% event and the per-second throughput sample visible.
+        if bytes < tasks[index].fileSize &&
+            displayedElapsed < 0.25 && elapsed < 1 {
+            return
+        }
+
+        tasks[index].transferredBytes = min(bytes, tasks[index].fileSize)
+        lastProgressUIUpdate[id] = now
         if elapsed >= 1 {
             let currentTotal = transferredBytes
-            bytesPerSecond = max(0, Double(currentTotal - speedSampleBytes) / elapsed)
+            bytesPerSecond = max(
+                0, Double(currentTotal - speedSampleBytes) / elapsed
+            )
             speedSampleDate = now
             speedSampleBytes = currentTotal
             persistTasks()
