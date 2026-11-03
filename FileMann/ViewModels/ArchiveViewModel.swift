@@ -1390,18 +1390,120 @@ final class ArchiveViewModel: ObservableObject {
         )
     }
 
+    /// Reconcile durable verified results before inspecting URLSession
+    /// tasks. Background callbacks can arrive before SwiftUI observers are
+    /// installed, or the process may be suspended between a NAS MOVE and
+    /// updating the task store.
+    private func applyBackgroundReceipts() {
+        for receipt in WebDAVBackgroundReceiptStore.load() {
+            guard let index = tasks.firstIndex(where: {
+                $0.id == receipt.taskID
+            }) else {
+                WebDAVBackgroundReceiptStore.remove(
+                    taskID: receipt.taskID
+                )
+                continue
+            }
+
+            switch receipt.outcome {
+            case .verified:
+                guard let endpoint = receipt.endpoint,
+                      let remotePath = receipt.remotePath,
+                      let bytes = receipt.remoteSize,
+                      bytes == tasks[index].fileSize,
+                      endpoint == tasks[index].remoteEndpointURL,
+                      remotePath == tasks[index].attemptedRemotePath else {
+                    // Do not reuse a stale receipt after a rename, changed
+                    // endpoint or newly queued transfer under the same ID.
+                    WebDAVBackgroundReceiptStore.remove(
+                        taskID: receipt.taskID
+                    )
+                    continue
+                }
+                tasks[index].transferredBytes = bytes
+                tasks[index].remoteVerifiedPath = remotePath
+                tasks[index].remoteEndpointURL = endpoint
+                tasks[index].verifiedAt = receipt.recordedAt
+                tasks[index].completionKind = .uploaded
+                tasks[index].state = .completed
+                tasks[index].errorMessage =
+                    "后台归档完成：已恢复 NAS 严格落盘校验结果"
+                cleanupShareStaging(at: index)
+
+            case .failed:
+                if tasks[index].state != .completed {
+                    tasks[index].state = .failed
+                    tasks[index].errorMessage =
+                        "后台传输中断：" +
+                        (receipt.message ?? "请检查网络后重试")
+                }
+            }
+
+            // Never drop the journal before the task store was updated.
+            persistTasks()
+            WebDAVBackgroundReceiptStore.remove(
+                taskID: receipt.taskID
+            )
+        }
+    }
+
+    /// Called only while the app is visible to the user. iOS controls when
+    /// it runs background tasks, so simply reopening FileMann may safely
+    /// restore a user-started queue, but an explicit Pause stays respected.
+    func resumeOnForegroundIfNeeded() {
+        guard !isRecoveringOnForeground else { return }
+        isRecoveringOnForeground = true
+
+        Task { @MainActor in
+            defer { isRecoveringOnForeground = false }
+            await restoreWebDAVBackgroundTasks()
+
+            guard TaskStore.shouldResumeArchive(), !isRunning,
+                  unresolvedDuplicateCount == 0 else {
+                return
+            }
+
+            let hasPending = tasks.contains { task in
+                (task.state == .queued || task.state == .paused) &&
+                !task.needsShareFilenameDecision
+            }
+            guard hasPending else { return }
+
+            for index in tasks.indices where tasks[index].state == .paused {
+                tasks[index].state = .queued
+                tasks[index].errorMessage =
+                    "从上次系统后台中断后继续排队"
+            }
+            persistTasks()
+            startWebDAV(retryFailed: false)
+        }
+    }
+
     private func restoreWebDAVBackgroundTasks() async {
         guard settings.transport == .webDAV else { return }
 
+        // Creating the same background session identifier is required even
+        // on a cold start with no visible UIKit scene.
+        WebDAVBackgroundUploadManager.shared.reconnectBackgroundSession()
+        applyBackgroundReceipts()
+
         let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
+        applyBackgroundReceipts()
         let matching = Set(tasks.filter { active.contains($0.id) }.map(\.id))
         guard !matching.isEmpty else { return }
 
+        let userStillWantsTransfer = TaskStore.shouldResumeArchive()
         for index in tasks.indices where matching.contains(tasks[index].id) {
-            tasks[index].state = .uploading
-            tasks[index].errorMessage = "iOS 后台上传中"
+            if tasks[index].state != .completed {
+                tasks[index].state = userStillWantsTransfer
+                    ? .uploading : .paused
+                tasks[index].errorMessage = userStillWantsTransfer
+                    ? "iOS 后台上传任务已恢复"
+                    : "已暂停，等待用户手动继续"
+            }
         }
-        isRunning = true
+        isRunning = userStillWantsTransfer &&
+            tasks.contains(where: { $0.state == .uploading })
         persistTasks()
     }
 
