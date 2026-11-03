@@ -79,6 +79,14 @@ final class WebDAVBackgroundUploadManager: NSObject {
         }
     }
 
+    /// Cancel every FileMann WebDAV background task before clearing
+    /// the local queue. Never issues NAS DELETE or touches Photos originals.
+    func cancelAll() {
+        session.getAllTasks { tasks in
+            tasks.forEach { $0.cancel() }
+        }
+    }
+
     func cancel(taskID: UUID) {
         session.getAllTasks { tasks in
             for task in tasks {
