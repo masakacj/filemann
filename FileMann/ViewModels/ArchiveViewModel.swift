@@ -578,8 +578,8 @@ final class ArchiveViewModel: ObservableObject {
     /// Rename only the queued share import. The App Group staging filename
     /// and Photos original are unaffected; only the future NAS name changes.
     func renameQueuedSharedMedia(_ task: ArchiveTask, to proposed: String) {
-        guard !isRunning,
-              let index = tasks.firstIndex(where: { $0.id == task.id }),
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }),
+              (!isRunning || tasks[index].needsShareFilenameDecision),
               tasks[index].isShareStaging == true,
               [.queued, .failed, .missingSource]
                   .contains(tasks[index].state) else {
@@ -632,8 +632,8 @@ final class ArchiveViewModel: ObservableObject {
     /// Explicit consent to use the temporary filename. The NAS collision
     /// guard still adds (2), (3) instead of overwriting an existing file.
     func approvePlaceholderName(for task: ArchiveTask) {
-        guard !isRunning,
-              let index = tasks.firstIndex(where: { $0.id == task.id }),
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }),
+              (!isRunning || tasks[index].needsShareFilenameDecision),
               tasks[index].isShareStaging == true,
               tasks[index].needsShareFilenameDecision,
               [.queued, .failed, .missingSource].contains(
@@ -1043,6 +1043,9 @@ final class ArchiveViewModel: ObservableObject {
                     task: task,
                     sourceURL: sourceURL
                 ) {
+                    guard tasks.contains(where: { $0.id == task.id }) else {
+                        return false
+                    }
                     duplicateCandidates.append(
                         DuplicateCandidate(
                             taskID: task.id,
