@@ -3,6 +3,7 @@ import UIKit
 
 struct ArchiveView: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
+    @State private var isConfirmingClearAll = false
 
     var body: some View {
         NavigationStack {
@@ -79,6 +80,13 @@ struct ArchiveView: View {
                         }
                     }
 
+                    if !viewModel.tasks.isEmpty {
+                        Button("清空全部") {
+                            isConfirmingClearAll = true
+                        }
+                        .foregroundStyle(.red)
+                    }
+
                     Button {
                         viewModel.isShowingSettings = true
                     } label: {
@@ -87,6 +95,21 @@ struct ArchiveView: View {
                     .accessibilityLabel("SMB 设置")
                 }
             }
+        }
+        .confirmationDialog(
+            "清空所有归档任务？",
+            isPresented: $isConfirmingClearAll,
+            titleVisibility: .visible
+        ) {
+            Button("清空全部任务", role: .destructive) {
+                viewModel.clearAllTasks()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "将取消当前传输，清除全部任务和 FileMann 分享暂存文件。" +
+                "不会删除 iPhone 相册原件或 NAS 已有文件。"
+            )
         }
         .sheet(isPresented: $viewModel.isShowingFilePicker) {
             DocumentPicker { urls in
@@ -294,8 +317,41 @@ private struct ArchiveTaskRow: View {
                 .foregroundStyle(.secondary)
             }
 
-            if task.isShareStaging == true,
-               [.queued, .failed, .missingSource].contains(task.state) {
+            if task.needsShareFilenameDecision {
+                HStack(alignment: .top, spacing: 10) {
+                    FileThumbnailView(bookmark: task.bookmark)
+                        .frame(width: 68, height: 68)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            task.shareSelectionIndex.map {
+                                "相册第 \($0) 项 · 未识别原文件名"
+                            } ?? "相册媒体 · 未识别原文件名",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                        Text("可对照缩略图确认，原文件名未知时不会自动上传")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack {
+                    Button("自定义文件名") {
+                        filenameDraft = task.displayName
+                        isRenaming = true
+                    }
+                    .buttonStyle(.bordered)
+                    Button("使用占位文件名") {
+                        viewModel.approvePlaceholderName(for: task)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .font(.caption)
+            } else if task.isShareStaging == true,
+                      [.queued, .failed, .missingSource]
+                          .contains(task.state) {
                 Button("修改上传文件名") {
                     filenameDraft = task.displayName
                     isRenaming = true
