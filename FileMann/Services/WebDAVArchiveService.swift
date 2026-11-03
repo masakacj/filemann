@@ -772,6 +772,52 @@ final class WebDAVArchiveService {
         )
     }
 
+    /// One Depth:1 directory listing verifies all completed files in the
+    /// same archive folder, rather than re-fetching a directory with
+    /// thousands of photos once for every completed task. Missing or
+    /// size-mismatched files remain unverified; this never uses HEAD alone.
+    func verifyPublishedBatch(
+        _ files: [(path: String, expectedBytes: Int64)]
+    ) async -> [String: Int64] {
+        let grouped = Dictionary(grouping: files) { file in
+            (normalize(file.path) as NSString).deletingLastPathComponent
+        }
+        var verified: [String: Int64] = [:]
+        for (parent, expectations) in grouped {
+            do {
+                let listing = try await propfind(
+                    path: parent, depth: "1"
+                )
+                let entries = try WebDAVMultiStatusParser(
+                    data: listing
+                ).parse()
+                var actualSizes: [String: Int64] = [:]
+                for entry in entries {
+                    guard !entry.isCollection,
+                          let relative = relativePath(
+                              fromHref: entry.href
+                          ),
+                          isImmediateChild(relative, of: parent),
+                          let length = entry.contentLength else {
+                        continue
+                    }
+                    actualSizes[relative] = length
+                }
+                for file in expectations {
+                    let path = normalize(file.path)
+                    if actualSizes[path] == file.expectedBytes {
+                        verified[path] = file.expectedBytes
+                    }
+                }
+            } catch {
+                // A parent-listing error invalidates only that directory,
+                // not verified media in other directories/endpoints.
+                continue
+            }
+        }
+        return verified
+    }
+
     func findExactDuplicate(
         task: ArchiveTask,
         sourceURL: URL
