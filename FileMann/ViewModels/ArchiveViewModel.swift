@@ -1309,13 +1309,25 @@ final class ArchiveViewModel: ObservableObject {
                         self.webDAVBatchService?.invalidateRemoteInventory()
                     }
                     self.lastProgressUIUpdate.removeValue(forKey: taskID)
-                    if self.isRunning && self.tasks.contains(where: {
+                    let hasUploadableQueue = self.tasks.contains {
                         $0.state == .queued &&
                         !$0.needsShareFilenameDecision
-                    }) {
+                    }
+                    if self.isRunning && hasUploadableQueue {
                         // Refill one free small-file upload slot even if
                         // the other concurrent HEIC is still transferring.
                         self.startWebDAV(retryFailed: false)
+                    } else if !hasUploadableQueue &&
+                              !self.tasks.contains(where: {
+                                  $0.state == .uploading
+                              }) &&
+                              self.unresolvedShareNamesCount > 0 {
+                        // Do not display "传输中" forever when only
+                        // unnamed, deliberately unscheduled Photos remain.
+                        self.isRunning = false
+                        self.statusMessage =
+                            "其他文件已完成；还有 \(self.unresolvedShareNamesCount) 项" +
+                            "待确认文件名"
                     }
                     await self.finishWebDAVBatchIfPossible()
                 }
