@@ -155,19 +155,34 @@ enum FileMannShareFileNaming {
         let unresolved: Bool
 
         do {
-            let candidate = try preferredName(
+            let suggestedCandidate = try preferredName(
                 suggestedName: suggestedName,
                 sourceFilename: sourceURL.lastPathComponent,
                 typeIdentifier: typeIdentifier
             )
             if signature == .heic {
-                let ext = (candidate as NSString)
+                // Photos can claim JPG as its preferred display name even
+                // while the requested provider supplies actual HEIC bytes.
+                // A credible file URL with a HEIC original filename wins.
+                let sourceCandidate = try? preferredName(
+                    suggestedName: nil,
+                    sourceFilename: sourceURL.lastPathComponent,
+                    typeIdentifier: typeIdentifier
+                )
+                let sourceExt = ((sourceCandidate ?? "") as NSString)
                     .pathExtension.lowercased()
+                let useSource = sourceExt == "heic" ||
+                    sourceExt == "heif"
+                let candidate = useSource
+                    ? sourceCandidate! : suggestedCandidate
+                let ext = (candidate as NSString).pathExtension.lowercased()
                 guard ext == "heic" || ext == "heif" else {
                     throw NameError.originalFilenameUnavailable
                 }
+                filename = candidate
+            } else {
+                filename = suggestedCandidate
             }
-            filename = candidate
             unresolved = false
         } catch NameError.originalFilenameUnavailable {
             filename = temporaryPlaceholder(
