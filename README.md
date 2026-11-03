@@ -17,6 +17,14 @@ FileMann 现在仅使用 **WebDAV** 进行 NAS 浏览和归档：局域网 WebDA
 - iOS 后台 URLSession 可接管文件上传，但 NAS 若不支持 HTTP resumable upload，网络中断后的重试可能需要重传完整文件；当前不能保证字节级续传。URLSession 也可能创建上传临时副本，完成后由系统回收。
 - NAS 私密账号及外网地址只保存在个人配置中心，不能写进 GitHub。
 
+## HEIC 原始格式导入（2026-11-03）
+
+- **iOS「照片」分享**：选择照片后点「分享 → 选项 → 格式 → 当前（Current）」以避免 iOS 自动把 HEIC 转成 JPEG。FileMann 分享扩展会在系统实际提供的格式中**优先请求 HEIC / HEIF**，而不是按枚举顺序误选 JPEG。
+- **FileMann「传输」标签页 → 从相册导入原格式（优先 HEIC）**：使用 iOS `PHPickerConfiguration.preferredAssetRepresentationMode = .current` 选择照片/视频；系统可提供 HEIC 原格式时，FileMann 只复制文件字节，不调用 UIImage 转码。可选多项，逐项暂存到持久化队列。该选项是“避免转码”的优先模式，不能强迫系统生成它没有提供的原始表示。
+- **原名与格式双重校验**：保留提供方真实文件名；针对 HEIC 数据检测文件头（HEIF `ftyp`），发现声称 HEIC 却收到 JPEG 时拒绝把 JPEG 假装成 HEIC，提示更换分享格式。若系统仅提供 JPEG、没有原 HEIC，FileMann 无法通过修改扩展名恢复 HEIC 原件。
+- **HEIC 文件名修正**：如果提供方同时给出临时 JPEG 名称与真正的 HEIC 文件名，优先使用与实际 HEIC 字节相符的文件名；原名未提供时仍在 FileMann 队列标记“待确认文件名”，可以根据预览和选择序号自定义或授权使用占位名。
+- **已转成 JPEG 的历史上传**不会被原地改扩展名。需要从相册重新导入相应原始 HEIC，避免在 NAS 上覆盖或伪造文件。
+
 ## 2026-11-03：未命名媒体和全量任务清理
 
 - iOS Photos 在批量分享时可能只返回 `shared-media.mp4` 这样的通用文件名。FileMann **不再将媒体直接拒绝**：文件字节照常暂存到 App Group，并附带原选择位置（例如第 29 项）和“待确认文件名”的本地元数据。
