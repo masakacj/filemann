@@ -35,6 +35,31 @@ final class ArchiveViewModel: ObservableObject {
     private var speedSampleBytes: Int64 = 0
     private var notificationObservers: [NSObjectProtocol] = []
 
+    // Retained only for the current upload batch. Avoid reconnecting,
+    // re-running PUT/MOVE permission probes and re-downloading the same
+    // duplicate candidates after each small HEIC finishes.
+    private var webDAVBatchService: WebDAVArchiveService?
+    private var webDAVBatchMode: WebDAVUploadMode?
+    private var webDAVBatchSettings: SMBSettings?
+    private var webDAVBatchPassword: String?
+    private var checkedDuplicateTaskIDs = Set<UUID>()
+    private var webDAVScheduling = false
+    private var webDAVRefillRequested = false
+
+    // URLSession can emit a callback every few KB. Throttle visual updates
+    // and persist the transfer checkpoint only about once per second.
+    private var lastProgressUIUpdate: [UUID: Date] = [:]
+
+    private func resetWebDAVBatchCache() {
+        webDAVBatchService = nil
+        webDAVBatchMode = nil
+        webDAVBatchSettings = nil
+        webDAVBatchPassword = nil
+        checkedDuplicateTaskIDs.removeAll()
+        lastProgressUIUpdate.removeAll()
+        webDAVRefillRequested = false
+    }
+
     init() {
         self.tasks = TaskStore.loadTasks().map { task in
             var value = task
@@ -513,11 +538,16 @@ final class ArchiveViewModel: ObservableObject {
         // No SMB fallback: all new and restored tasks use the system-backed
         // WebDAV upload manager for local or remote transfer.
         settings.transport = .webDAV
+        // A manual start begins a fresh batch. Auto-refills in the same
+        // batch use retryFailed:false and retain the cached preflight.
+        resetWebDAVBatchCache()
         startWebDAV()
     }
 
     func pause() {
         if settings.transport == .webDAV {
+            queueGeneration += 1
+            resetWebDAVBatchCache()
             WebDAVBackgroundUploadManager.shared.suspendAll()
             isRunning = false
             for index in tasks.indices where tasks[index].state == .uploading {
@@ -779,6 +809,7 @@ final class ArchiveViewModel: ObservableObject {
     /// are purged, so importing will not re-add cleared entries on launch.
     func clearAllTasks() {
         queueGeneration += 1
+        resetWebDAVBatchCache()
         worker?.cancel()
         worker = nil
         WebDAVBackgroundUploadManager.shared.cancelAll()
@@ -1264,6 +1295,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         isRunning = false
+        resetWebDAVBatchCache()
 
         if tasks.contains(where: {
             $0.state == .failed || $0.state == .missingSource
