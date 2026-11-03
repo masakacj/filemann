@@ -566,7 +566,7 @@ final class ArchiveViewModel: ObservableObject {
            let url = try? resolveBookmark(task.bookmark),
            url.deletingLastPathComponent().standardizedFileURL ==
                inbox.standardizedFileURL {
-            FileMannShareFileNaming.discardStagedFile(url)
+            try? FileMannShareFileNaming.discardStagedFile(url)
         }
         tasks.removeAll { $0.id == task.id }
         duplicateCandidates.removeAll { $0.taskID == task.id }
@@ -1604,7 +1604,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         do {
-            FileMannShareFileNaming.discardStagedFile(url)
+            try FileMannShareFileNaming.discardStagedFile(url)
             tasks[index].sourceDeleted = true
             tasks[index].errorMessage =
                 "已验证归档；分享暂存文件已清理，相册原件不受影响"
