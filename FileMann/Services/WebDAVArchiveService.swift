@@ -936,6 +936,12 @@ final class WebDAVArchiveService {
         }
     }
 
+    /// The same batch reuses the inventory, but must see new NAS files if
+    /// additional user media is queued while uploads are in progress.
+    func invalidateRemoteInventory() {
+        cachedRemoteInventory = nil
+    }
+
     private func remoteInventory() async throws -> [RemoteFileInfo] {
         if let cachedRemoteInventory {
             return cachedRemoteInventory
