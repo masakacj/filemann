@@ -913,13 +913,20 @@ final class WebDAVArchiveService {
             applyAuthorization(to: &request)
 
             let (_, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse,
-               (200...299).contains(http.statusCode),
-               let value = http.value(
-                    forHTTPHeaderField: "Content-Length"
-               ),
-               let size = Int64(value) {
-                return size
+            if let http = response as? HTTPURLResponse {
+                // Missing targets are normal during a large HEIC batch.
+                // A definitive 404/410 doesn't need a second PROPFIND.
+                // Keep the PROPFIND fallback for HEAD-rejecting NAS proxies.
+                if http.statusCode == 404 || http.statusCode == 410 {
+                    return nil
+                }
+                if (200...299).contains(http.statusCode),
+                   let value = http.value(
+                       forHTTPHeaderField: "Content-Length"
+                   ),
+                   let size = Int64(value) {
+                    return size
+                }
             }
         } catch {
             // Fall back to PROPFIND below.
