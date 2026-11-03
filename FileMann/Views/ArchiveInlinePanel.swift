@@ -4,7 +4,7 @@ import UIKit
 struct ArchiveInlinePanel: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
     @AppStorage("filemann.archive.panel.expanded")
-    private var isExpanded = true
+    private var isExpanded = false
     @State private var isConfirmingClearAll = false
     @State private var showOnlyUnnamed = false
 
@@ -134,6 +134,7 @@ struct ArchiveInlinePanel: View {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
 
                 if isExpanded {
@@ -156,13 +157,18 @@ struct ArchiveInlinePanel: View {
                         .font(.caption)
                     }
 
-                    ForEach(showOnlyUnnamed && viewModel.unresolvedShareNamesCount > 0
-                        ? viewModel.tasks.filter {
-                            $0.needsShareFilenameDecision
-                        }
-                        : viewModel.tasks) { task in
+                    // A 200+ item transfer queue must not create 200
+                    // expanded rows *above* the actual local photo grid.
+                    // The full queue remains available in the Transfer tab.
+                    ForEach(previewTasks) { task in
                         ArchiveInlineTaskRow(task: task)
                             .environmentObject(viewModel)
+                    }
+                    if previewCount > previewTasks.count {
+                        Text("还有 \(previewCount - previewTasks.count) 项；完整列表请切换底部「传输」标签页")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
@@ -188,6 +194,26 @@ struct ArchiveInlinePanel: View {
 
     private var activeTaskCount: Int {
         viewModel.tasks.filter { $0.state != .skipped }.count
+    }
+
+    private var selectedPreviewTasks: [ArchiveTask] {
+        if showOnlyUnnamed && viewModel.unresolvedShareNamesCount > 0 {
+            return viewModel.tasks.filter {
+                $0.needsShareFilenameDecision
+            }
+        }
+        return viewModel.tasks
+    }
+
+    private var previewTasks: [ArchiveTask] {
+        Array(selectedPreviewTasks.prefix(4))
+    }
+
+    private var previewCount: Int {
+        if showOnlyUnnamed && viewModel.unresolvedShareNamesCount > 0 {
+            return viewModel.unresolvedShareNamesCount
+        }
+        return viewModel.tasks.count
     }
 }
 

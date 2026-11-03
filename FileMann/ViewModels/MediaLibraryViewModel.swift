@@ -244,16 +244,20 @@ final class MediaLibraryViewModel: ObservableObject {
         }
 
         var seen: Set<String> = []
-        let items = urls
+        let uniqueItems = urls
             .compactMap(MediaItem.init(url:))
             .filter { item in
                 seen.insert(
                     item.url.standardizedFileURL.path
                 ).inserted
             }
-            .sorted {
-                $0.modifiedAt > $1.modifiedAt
-            }
+        // Exported HEIC/MOV media may share the same mtime. A comparison
+        // based only on date is not a total ordering and makes the grid
+        // appear to shuffle on every refresh.
+        let items = MediaLibraryOrdering.sorted(
+            uniqueItems,
+            by: .shootingNewest
+        )
 
         return MediaLibraryScanResult(
             items: items,

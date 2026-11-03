@@ -39,7 +39,13 @@ struct MediaThumbnailView: View {
         }
         .clipped()
         .task(id: item.id) {
-            image = await thumbnail()
+            // LazyVGrid reuses cells while refreshing an exported folder.
+            // Clear the old image before a new async QuickLook request or
+            // a previous HEIC/MOV thumbnail can appear under the wrong name.
+            image = nil
+            let rendered = await thumbnail()
+            guard !Task.isCancelled else { return }
+            image = rendered
         }
     }
 
