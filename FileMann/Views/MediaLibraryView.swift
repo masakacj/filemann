@@ -9,6 +9,11 @@ struct MediaLibraryView: View {
 
     @AppStorage("filemann.media.thumbnailSize")
     private var thumbnailSize: Double = 112
+    @AppStorage("filemann.media.sortOrder")
+    private var sortOrderRaw =
+        MediaLibrarySortOrder.shootingNewest.rawValue
+    @AppStorage("filemann.media.displayMode")
+    private var displayMode = "grid"
 
     @State private var presentedItem: MediaItem?
     @State private var showDeleteConfirmation = false
@@ -20,9 +25,57 @@ struct MediaLibraryView: View {
                 .adaptive(
                     minimum: CGFloat(thumbnailSize)
                 ),
-                spacing: 2
+                spacing: 9
             )
         ]
+    }
+
+    private var sortOrder: MediaLibrarySortOrder {
+        MediaLibrarySortOrder(rawValue: sortOrderRaw) ??
+            .shootingNewest
+    }
+
+    private struct GallerySection: Identifiable {
+        let id: String
+        let title: String
+        var items: [MediaItem]
+    }
+
+    private var gallerySections: [GallerySection] {
+        let sorted = MediaLibraryOrdering.sorted(
+            viewModel.items,
+            by: sortOrder
+        )
+        if !sortOrder.groupsByDay {
+            return [
+                GallerySection(
+                    id: "all",
+                    title: "全部媒体",
+                    items: sorted
+                )
+            ]
+        }
+
+        var sections: [GallerySection] = []
+        let calendar = Calendar.current
+        for item in sorted {
+            let unknownDate = item.preferredDate == .distantPast
+            let date = calendar.startOfDay(for: item.preferredDate)
+            let key = unknownDate
+                ? "undated"
+                : String(Int(date.timeIntervalSince1970))
+            let title = unknownDate
+                ? "日期未知"
+                : date.formatted(date: .abbreviated, time: .omitted)
+            if sections.last?.id == key {
+                sections[sections.count - 1].items.append(item)
+            } else {
+                sections.append(
+                    GallerySection(id: key, title: title, items: [item])
+                )
+            }
+        }
+        return sections
     }
 
     var body: some View {
@@ -90,15 +143,7 @@ struct MediaLibraryView: View {
                                 : 20
                         )
                     } else {
-                        LazyVGrid(
-                            columns: columns,
-                            spacing: 2
-                        ) {
-                            ForEach(viewModel.items) {
-                                item in
-                                mediaCell(item)
-                            }
-                        }
+                        galleryContent
                     }
                 }
                 .padding(.top, 4)
@@ -163,6 +208,24 @@ struct MediaLibraryView: View {
                                         .tag(138.0)
                                     Text("大")
                                         .tag(178.0)
+                                }
+                            }
+
+                            Section("排列方式") {
+                                Picker(
+                                    "排序",
+                                    selection: $sortOrderRaw
+                                ) {
+                                    ForEach(MediaLibrarySortOrder.allCases) { order in
+                                        Text(order.title).tag(order.rawValue)
+                                    }
+                                }
+                                Picker(
+                                    "视图",
+                                    selection: $displayMode
+                                ) {
+                                    Text("缩略图").tag("grid")
+                                    Text("详细列表").tag("list")
                                 }
                             }
 
@@ -367,67 +430,227 @@ struct MediaLibraryView: View {
         }
     }
 
+    private var galleryContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                let photos = viewModel.items.filter {
+                    $0.kind == .image
+                }.count
+                let videos = viewModel.items.count - photos
+                Text("\(photos) 张照片 · \(videos) 个视频")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Spacer(minLength: 4)
+
+                Menu {
+                    Picker("排序方式", selection: $sortOrderRaw) {
+                        ForEach(MediaLibrarySortOrder.allCases) { order in
+                            Text(order.title).tag(order.rawValue)
+                        }
+                    }
+                } label: {
+                    Label("排序", systemImage: "arrow.up.arrow.down")
+                        .font(.caption)
+                }
+                .accessibilityIdentifier("media-library-sort-menu")
+
+                Button {
+                    displayMode = displayMode == "grid"
+                        ? "list" : "grid"
+                } label: {
+                    Image(
+                        systemName: displayMode == "grid"
+                            ? "list.bullet" : "square.grid.3x3"
+                    )
+                    .frame(width: 28, height: 30)
+                }
+                .accessibilityLabel(
+                    displayMode == "grid" ? "切换列表视图" : "切换缩略图视图"
+                )
+                .accessibilityIdentifier("media-library-layout-toggle")
+            }
+            .padding(.vertical, 3)
+
+            LazyVStack(alignment: .leading, spacing: 18) {
+                ForEach(gallerySections) { section in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(section.title)
+                                .font(.subheadline.bold())
+                            Spacer()
+                            Text("\(section.items.count) 项")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 4)
+                        .accessibilityElement(children: .combine)
+
+                        if displayMode == "list" {
+                            LazyVStack(spacing: 1) {
+                                ForEach(section.items) { item in
+                                    mediaListRow(item)
+                                }
+                            }
+                        } else {
+                            LazyVGrid(columns: columns, spacing: 12) {
+                                ForEach(section.items) { item in
+                                    mediaCell(item)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 24)
+    }
+
+    private func openOrSelect(_ item: MediaItem) {
+        if viewModel.isSelectionMode {
+            viewModel.toggleSelection(item)
+        } else {
+            presentedItem = item
+        }
+    }
+
+    private func mediaListRow(_ item: MediaItem) -> some View {
+        Button {
+            openOrSelect(item)
+        } label: {
+            HStack(spacing: 12) {
+                MediaThumbnailView(
+                    item: item,
+                    targetSize: CGSize(width: 160, height: 160)
+                )
+                .frame(width: 68, height: 68)
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name)
+                        .font(.subheadline)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+
+                    HStack(spacing: 7) {
+                        Text(item.url.pathExtension.uppercased())
+                        Text(ByteFormat.string(item.fileSize))
+                    }
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                    if item.preferredDate != .distantPast {
+                        Text(
+                            item.preferredDate.formatted(
+                                date: .abbreviated,
+                                time: .shortened
+                            )
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 4)
+                if viewModel.isSelectionMode {
+                    Image(
+                        systemName: viewModel.selectedIDs.contains(item.id)
+                            ? "checkmark.circle.fill" : "circle"
+                    )
+                    .font(.title3)
+                    .foregroundStyle(
+                        viewModel.selectedIDs.contains(item.id)
+                            ? .blue : .secondary
+                    )
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(
+                .thinMaterial,
+                in: RoundedRectangle(cornerRadius: 10)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func mediaCell(
         _ item: MediaItem
     ) -> some View {
         Button {
-            if viewModel.isSelectionMode {
-                viewModel.toggleSelection(item)
-            } else {
-                presentedItem = item
-            }
+            openOrSelect(item)
         } label: {
-            GeometryReader { proxy in
-                ZStack(
-                    alignment: .topTrailing
-                ) {
-                    MediaThumbnailView(
-                        item: item,
-                        targetSize: CGSize(
-                            width: max(
-                                180,
-                                proxy.size.width * 2
-                            ),
-                            height: max(
-                                180,
-                                proxy.size.width * 2
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geometry in
+                    ZStack(alignment: .topTrailing) {
+                        MediaThumbnailView(
+                            item: item,
+                            targetSize: CGSize(
+                                width: max(180, geometry.size.width * 2),
+                                height: max(180, geometry.size.width * 2)
                             )
                         )
-                    )
-                    .frame(
-                        width: proxy.size.width,
-                        height: proxy.size.width
-                    )
+                        .frame(
+                            width: geometry.size.width,
+                            height: geometry.size.width
+                        )
+                        .clipped()
 
-                    if viewModel.isSelectionMode {
-                        Image(
-                            systemName:
-                                viewModel
-                                    .selectedIDs
-                                    .contains(item.id)
-                                ? "checkmark.circle.fill"
-                                : "circle"
-                        )
-                        .font(.title3)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(
-                            .white,
-                            viewModel
-                                .selectedIDs
-                                .contains(item.id)
-                                ? .blue
-                                : .black.opacity(0.35)
-                        )
-                        .padding(7)
+                        if viewModel.isSelectionMode {
+                            Image(
+                                systemName: viewModel.selectedIDs.contains(item.id)
+                                    ? "checkmark.circle.fill" : "circle"
+                            )
+                            .font(.title3)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(
+                                .white,
+                                viewModel.selectedIDs.contains(item.id)
+                                    ? .blue : .black.opacity(0.35)
+                            )
+                            .padding(6)
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        Text(item.url.pathExtension.uppercased())
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 3)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding(5)
                     }
                 }
+                .aspectRatio(1, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                Text(item.name)
+                    .font(.caption2)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: 30,
+                        maxHeight: 30,
+                        alignment: .topLeading
+                    )
             }
-            .aspectRatio(
-                1,
-                contentMode: .fit
-            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(
+            "\(item.name)，\(item.kind == .image ? "照片" : "视频")"
+        )
     }
 
     private var selectionBar: some View {
