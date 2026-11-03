@@ -57,6 +57,27 @@ struct OriginalPhotosPicker: UIViewControllerRepresentable {
             self.onFinish = onFinish
         }
 
+        private func originalFilenameIfAccessible(
+            for result: PHPickerResult
+        ) -> String? {
+            let authorization = PHPhotoLibrary.authorizationStatus(
+                for: .readWrite
+            )
+            guard authorization == .authorized ||
+                    authorization == .limited,
+                  let identifier = result.assetIdentifier,
+                  let asset = PHAsset.fetchAssets(
+                    withLocalIdentifiers: [identifier],
+                    options: nil
+                  ).firstObject else {
+                return nil
+            }
+            let resources = PHAssetResource.assetResources(for: asset)
+            return resources.first(where: {
+                $0.type == .photo || $0.type == .video
+            })?.originalFilename
+        }
+
         func picker(
             _ picker: PHPickerViewController,
             didFinishPicking results: [PHPickerResult]
@@ -75,10 +96,17 @@ struct OriginalPhotosPicker: UIViewControllerRepresentable {
                     for (index, result) in results.enumerated() {
                         onProgress(index + 1, results.count)
                         do {
+                            // When the user has already granted PhotoKit
+                            // access, use the asset's real originalFilename.
+                            // PHPicker itself remains usable without access.
+                            let originalName = originalFilenameIfAccessible(
+                                for: result
+                            )
                             _ = try await FileMannMediaRepresentation.stageProvider(
                                 result.itemProvider,
                                 selectionIndex: index + 1,
-                                inbox: inbox
+                                inbox: inbox,
+                                originalFilenameHint: originalName
                             )
                             imported += 1
                             if imported % 20 == 0 {
