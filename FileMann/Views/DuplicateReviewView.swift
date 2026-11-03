@@ -6,6 +6,7 @@ struct DuplicateReviewView: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var destructiveCandidate: DuplicateCandidate?
+    @State private var isConfirmingKeepAllNAS = false
 
     var body: some View {
         NavigationStack {
@@ -15,10 +16,17 @@ struct DuplicateReviewView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
 
-                    if viewModel.unresolvedDuplicateCount > 1 {
-                        Button("未处理项全部只保留 NAS") {
-                            viewModel.applyDecisionToAllUnresolved(.keepNAS)
+                    if viewModel.selectableKeepNASDuplicateCount > 0 {
+                        Button {
+                            isConfirmingKeepAllNAS = true
+                        } label: {
+                            Label(
+                                "全部保留 NAS（\(viewModel.selectableKeepNASDuplicateCount) 项）",
+                                systemImage: "externaldrive.fill"
+                            )
                         }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("keep-nas-all-duplicates")
                     }
                 }
 
@@ -32,6 +40,20 @@ struct DuplicateReviewView: View {
             }
             .navigationTitle("重复文件")
             .navigationBarTitleDisplayMode(.inline)
+            .alert(
+                "全部只保留 NAS 副本？",
+                isPresented: $isConfirmingKeepAllNAS
+            ) {
+                Button("全部保留 NAS") {
+                    viewModel.keepNASForAllPendingDuplicates()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(
+                    "将 \(viewModel.selectableKeepNASDuplicateCount) 项尚未执行的重复文件统一设为“只保留 NAS”。" +
+                    "不会删除 NAS 文件；开始归档并通过整批校验后才清理对应手机副本。已完成任务不受影响。"
+                )
+            }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(viewModel.unresolvedDuplicateCount == 0 ? "完成" : "稍后处理") {
@@ -103,23 +125,29 @@ struct DuplicateReviewView: View {
                 )
             }
 
-            HStack {
-                Button("只保留 NAS") {
-                    viewModel.setDuplicateDecision(candidate.id, decision: .keepNAS)
-                }
-                .buttonStyle(.borderedProminent)
+            if task.state == .completed || task.state == .skipped {
+                Label("该重复文件已处理，无法更改", systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Button("只保留 NAS") {
+                        viewModel.setDuplicateDecision(candidate.id, decision: .keepNAS)
+                    }
+                    .buttonStyle(.borderedProminent)
 
-                Button("两边都保留") {
-                    viewModel.setDuplicateDecision(candidate.id, decision: .keepBoth)
-                }
-                .buttonStyle(.bordered)
+                    Button("两边都保留") {
+                        viewModel.setDuplicateDecision(candidate.id, decision: .keepBoth)
+                    }
+                    .buttonStyle(.bordered)
 
-                Button("只保留手机", role: .destructive) {
-                    destructiveCandidate = candidate
+                    Button("只保留手机", role: .destructive) {
+                        destructiveCandidate = candidate
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
+                .font(.caption)
             }
-            .font(.caption)
         }
         .padding(.vertical, 4)
     }
