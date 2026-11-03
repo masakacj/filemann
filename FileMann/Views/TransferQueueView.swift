@@ -45,6 +45,25 @@ struct TransferQueueView: View {
                         }
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                        if model.isRunning && model.bytesPerSecond > 0 {
+                            Label(
+                                "当前总上传速度：\(ByteFormat.string(Int64(model.bytesPerSecond)))/s",
+                                systemImage: "speedometer"
+                            )
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        }
+
+                        if model.activeWebDAVEndpoint?.hasPrefix("远程") == true {
+                            Label(
+                                "正在使用远程 WebDAV；若 iPhone 与 NAS 在同一 Wi-Fi，" +
+                                "配置可达的本地 WebDAV 地址通常能减少公网绕行。",
+                                systemImage: "wifi.exclamationmark"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                        }
                     }
                     .padding(.vertical, 5)
                 }

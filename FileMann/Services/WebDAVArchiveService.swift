@@ -100,6 +100,9 @@ final class WebDAVArchiveService {
     private let session: URLSession
     private let baseURL: URL
     private var cachedRemoteInventory: [RemoteFileInfo]?
+    // One successful write probe establishes the archive root. Newly
+    // created nested parent folders need only be checked once per batch.
+    private var preparedUploadDirectories = Set<String>()
 
     var baseURLString: String {
         baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -365,7 +368,9 @@ final class WebDAVArchiveService {
                 path: url.path
             )
         }
-        return try await verifyWriteOperations(in: directory)
+        let mode = try await verifyWriteOperations(in: directory)
+        preparedUploadDirectories.insert(directory)
+        return mode
     }
 
     // The connection test must check write/rename/delete permissions, not
@@ -646,7 +651,14 @@ final class WebDAVArchiveService {
 
     func prepareParentDirectory(for remotePath: String) async throws {
         let parent = (normalize(remotePath) as NSString).deletingLastPathComponent
+        // Avoid one redundant PROPFIND per HEIC. The preflight already
+        // verified the configured archive root is writable, and nested
+        // directories only need to be created/checked once in this batch.
+        if preparedUploadDirectories.contains(parent) {
+            return
+        }
         try await ensureDirectory(parent)
+        preparedUploadDirectories.insert(parent)
     }
 
     func makeUploadRequest(
@@ -758,6 +770,52 @@ final class WebDAVArchiveService {
             remoteSize: expectedBytes,
             remotePath: file
         )
+    }
+
+    /// One Depth:1 directory listing verifies all completed files in the
+    /// same archive folder, rather than re-fetching a directory with
+    /// thousands of photos once for every completed task. Missing or
+    /// size-mismatched files remain unverified; this never uses HEAD alone.
+    func verifyPublishedBatch(
+        _ files: [(path: String, expectedBytes: Int64)]
+    ) async -> [String: Int64] {
+        let grouped = Dictionary(grouping: files) { file in
+            (normalize(file.path) as NSString).deletingLastPathComponent
+        }
+        var verified: [String: Int64] = [:]
+        for (parent, expectations) in grouped {
+            do {
+                let listing = try await propfind(
+                    path: parent, depth: "1"
+                )
+                let entries = try WebDAVMultiStatusParser(
+                    data: listing
+                ).parse()
+                var actualSizes: [String: Int64] = [:]
+                for entry in entries {
+                    guard !entry.isCollection,
+                          let relative = relativePath(
+                              fromHref: entry.href
+                          ),
+                          isImmediateChild(relative, of: parent),
+                          let length = entry.contentLength else {
+                        continue
+                    }
+                    actualSizes[relative] = length
+                }
+                for file in expectations {
+                    let path = normalize(file.path)
+                    if actualSizes[path] == file.expectedBytes {
+                        verified[path] = file.expectedBytes
+                    }
+                }
+            } catch {
+                // A parent-listing error invalidates only that directory,
+                // not verified media in other directories/endpoints.
+                continue
+            }
+        }
+        return verified
     }
 
     func findExactDuplicate(
@@ -901,13 +959,20 @@ final class WebDAVArchiveService {
             applyAuthorization(to: &request)
 
             let (_, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse,
-               (200...299).contains(http.statusCode),
-               let value = http.value(
-                    forHTTPHeaderField: "Content-Length"
-               ),
-               let size = Int64(value) {
-                return size
+            if let http = response as? HTTPURLResponse {
+                // Missing targets are normal during a large HEIC batch.
+                // A definitive 404/410 doesn't need a second PROPFIND.
+                // Keep the PROPFIND fallback for HEAD-rejecting NAS proxies.
+                if http.statusCode == 404 || http.statusCode == 410 {
+                    return nil
+                }
+                if (200...299).contains(http.statusCode),
+                   let value = http.value(
+                       forHTTPHeaderField: "Content-Length"
+                   ),
+                   let size = Int64(value) {
+                    return size
+                }
             }
         } catch {
             // Fall back to PROPFIND below.
@@ -922,6 +987,12 @@ final class WebDAVArchiveService {
         } catch {
             return nil
         }
+    }
+
+    /// The same batch reuses the inventory, but must see new NAS files if
+    /// additional user media is queued while uploads are in progress.
+    func invalidateRemoteInventory() {
+        cachedRemoteInventory = nil
     }
 
     private func remoteInventory() async throws -> [RemoteFileInfo] {
