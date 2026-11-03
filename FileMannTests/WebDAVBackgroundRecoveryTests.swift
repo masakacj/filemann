@@ -71,6 +71,47 @@ final class WebDAVBackgroundRecoveryTests: XCTestCase {
         XCTAssertEqual(Set(loaded.map(\.taskID)), [first.taskID, second.taskID])
     }
 
+    func testVerifiedReceiptCannotBeReusedForAnotherEndpointOrName() {
+        var task = ArchiveTask(
+            bookmark: Data(),
+            displayName: "IMG_2011.HEIC",
+            remoteFileName: "IMG_2011.HEIC",
+            fileSize: 2000,
+            sourceModifiedAt: nil
+        )
+        task.remoteEndpointURL = "https://nas.example.com:443/storage"
+        task.attemptedRemotePath = "Apps/IMG_2011.HEIC"
+
+        let receipt = WebDAVBackgroundReceipt.verified(
+            taskID: task.id,
+            endpoint: task.remoteEndpointURL!,
+            path: task.attemptedRemotePath!,
+            size: task.fileSize
+        )
+        XCTAssertTrue(receipt.matchesVerifiedUpload(task))
+
+        var changedEndpoint = task
+        changedEndpoint.remoteEndpointURL =
+            "http://192.168.233.233:8900/storage"
+        XCTAssertFalse(receipt.matchesVerifiedUpload(changedEndpoint))
+
+        var renamed = task
+        renamed.attemptedRemotePath = "Apps/IMG_2011 (2).HEIC"
+        XCTAssertFalse(receipt.matchesVerifiedUpload(renamed))
+
+        var changedBytes = task
+        changedBytes.fileSize += 1
+        XCTAssertFalse(receipt.matchesVerifiedUpload(changedBytes))
+
+        let unrelated = WebDAVBackgroundReceipt.verified(
+            taskID: UUID(),
+            endpoint: task.remoteEndpointURL!,
+            path: task.attemptedRemotePath!,
+            size: task.fileSize
+        )
+        XCTAssertFalse(unrelated.matchesVerifiedUpload(task))
+    }
+
     func testResumeIntentExplicitlyControlsAutomaticRecovery() {
         let oldValue = TaskStore.shouldResumeArchive()
         defer { TaskStore.setShouldResumeArchive(oldValue) }
