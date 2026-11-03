@@ -35,7 +35,7 @@ final class MediaLibraryOrderingTests: XCTestCase {
         )
         XCTAssertEqual(
             MediaLibraryOrdering.sorted(
-                items.reversed(), by: .shootingNewest
+                Array(items.reversed()), by: .shootingNewest
             ).map(\.name),
             expected
         )
@@ -49,7 +49,7 @@ final class MediaLibraryOrderingTests: XCTestCase {
             MediaLibraryOrdering.sorted(
                 items, by: .filenameDescending
             ).map(\.name),
-            expected.reversed()
+            Array(expected.reversed())
         )
     }
 
@@ -119,7 +119,7 @@ final class MediaLibraryOrderingTests: XCTestCase {
                 items, by: .shootingNewest
             ).map(\.id),
             MediaLibraryOrdering.sorted(
-                items.reversed(), by: .shootingNewest
+                Array(items.reversed()), by: .shootingNewest
             ).map(\.id)
         )
     }
