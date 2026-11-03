@@ -142,21 +142,44 @@ enum FileMannShareFileNaming {
         selectionIndex: Int,
         in inbox: URL
     ) throws -> URL {
+        // Never label transcoded JPEG bytes as a HEIC original. The share
+        // host controls which representations it vends; the extension
+        // cannot reverse a JPEG conversion by renaming the file.
+        let signature = try FileMannMediaRepresentation
+            .verifyOriginalRepresentation(
+                at: sourceURL,
+                typeIdentifier: typeIdentifier,
+                suggestedName: suggestedName
+            )
         let filename: String
         let unresolved: Bool
 
         do {
-            filename = try preferredName(
+            let candidate = try preferredName(
                 suggestedName: suggestedName,
                 sourceFilename: sourceURL.lastPathComponent,
                 typeIdentifier: typeIdentifier
             )
+            if signature == .heic {
+                let ext = (candidate as NSString)
+                    .pathExtension.lowercased()
+                guard ext == "heic" || ext == "heif" else {
+                    throw NameError.originalFilenameUnavailable
+                }
+            }
+            filename = candidate
             unresolved = false
         } catch NameError.originalFilenameUnavailable {
-            filename = temporaryPlaceholder(for: typeIdentifier)
+            filename = temporaryPlaceholder(
+                for: typeIdentifier,
+                actualFormat: signature
+            )
             unresolved = true
         } catch NameError.invalidOriginalFilename {
-            filename = temporaryPlaceholder(for: typeIdentifier)
+            filename = temporaryPlaceholder(
+                for: typeIdentifier,
+                actualFormat: signature
+            )
             unresolved = true
         }
 
@@ -187,11 +210,19 @@ enum FileMannShareFileNaming {
     /// original filename; collision handling for the approved final name
     /// remains in ArchiveViewModel.
     private static func temporaryPlaceholder(
-        for typeIdentifier: String
+        for typeIdentifier: String,
+        actualFormat: FileMannMediaRepresentation.FileSignature = .other
     ) -> String {
         let type = UTType(typeIdentifier)
-        let fileExtension = type?.preferredFilenameExtension ??
-            (type?.conforms(to: .movie) == true ? "mov" : "jpg")
+        let fileExtension: String
+        switch actualFormat {
+        case .heic: fileExtension = "heic"
+        case .jpeg: fileExtension = "jpg"
+        case .png: fileExtension = "png"
+        case .other:
+            fileExtension = type?.preferredFilenameExtension ??
+                (type?.conforms(to: .movie) == true ? "mov" : "jpg")
+        }
         let marker = String(
             UUID().uuidString.replacingOccurrences(
                 of: "-", with: ""
