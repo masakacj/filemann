@@ -1564,7 +1564,19 @@ final class ArchiveViewModel: ObservableObject {
                 (task.state == .queued || task.state == .paused) &&
                 !task.needsShareFilenameDecision
             }
-            guard hasPending else { return }
+            if !hasPending {
+                // iOS may have completed the final background uploads
+                // while FileMann was not visible. Close the batch and
+                // clear the resume intent once all receipts are restored.
+                if !tasks.contains(where: {
+                    $0.state == .uploading ||
+                    $0.state == .paused ||
+                    $0.state == .queued
+                }) {
+                    await finishWebDAVBatchIfPossible()
+                }
+                return
+            }
 
             for index in tasks.indices where tasks[index].state == .paused {
                 tasks[index].state = .queued
