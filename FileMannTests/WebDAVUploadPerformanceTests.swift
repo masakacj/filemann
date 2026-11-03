@@ -12,14 +12,22 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
         )
         XCTAssertTrue(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: size,
+                fileSize: size + 1,
                 inFlightSizes: [size]
             )
         )
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: size + 2,
+                inFlightSizes: [size, size + 1]
+            )
+        )
+        // If a second item has exactly the same byte count, it might be
+        // a duplicate of the first. It must wait for a fresh NAS check.
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.canSchedule(
                 fileSize: size,
-                inFlightSizes: [size, size]
+                inFlightSizes: [size]
             )
         )
     }
