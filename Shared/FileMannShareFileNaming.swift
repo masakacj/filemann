@@ -105,6 +105,112 @@ enum FileMannShareFileNaming {
         return stem + " (\(number))." + extensionName
     }
 
+    /// Local-only metadata for Photos shares, never sent to the NAS.
+    /// Position refers to the original selection order, so an unresolved
+    /// item can be identified even when iOS supplies "shared-media.mp4".
+    struct StagedMetadata: Codable, Equatable {
+        let selectionIndex: Int
+        let needsFilenameDecision: Bool
+    }
+
+    static func metadataURL(for stagedFile: URL) -> URL {
+        stagedFile.appendingPathExtension("filemann-share.json")
+    }
+
+    static func readMetadata(for stagedFile: URL) -> StagedMetadata? {
+        guard let data = try? Data(
+            contentsOf: metadataURL(for: stagedFile)
+        ) else { return nil }
+        return try? JSONDecoder().decode(StagedMetadata.self, from: data)
+    }
+
+    static func isGeneratedPlaceholderName(_ name: String) -> Bool {
+        name.range(
+            of: #"^FileMann-待命名-[0-9a-f]{12}\.[a-z0-9]+$"#,
+            options: [.caseInsensitive, .regularExpression]
+        ) != nil
+    }
+
+    /// Stage every readable image/video, including ones with no trustworthy
+    /// original filename. Its unique name is a *temporary local label*;
+    /// the main app requires an explicit rename or placeholder approval
+    /// before scheduling a NAS upload.
+    static func stageForQueue(
+        sourceURL: URL,
+        suggestedName: String?,
+        typeIdentifier: String,
+        selectionIndex: Int,
+        in inbox: URL
+    ) throws -> URL {
+        let filename: String
+        let unresolved: Bool
+
+        do {
+            filename = try preferredName(
+                suggestedName: suggestedName,
+                sourceFilename: sourceURL.lastPathComponent,
+                typeIdentifier: typeIdentifier
+            )
+            unresolved = false
+        } catch NameError.originalFilenameUnavailable {
+            filename = temporaryPlaceholder(for: typeIdentifier)
+            unresolved = true
+        } catch NameError.invalidOriginalFilename {
+            filename = temporaryPlaceholder(for: typeIdentifier)
+            unresolved = true
+        }
+
+        let staged = try stage(
+            sourceURL: sourceURL,
+            suggestedName: filename,
+            typeIdentifier: typeIdentifier,
+            in: inbox
+        )
+        do {
+            let metadata = StagedMetadata(
+                selectionIndex: selectionIndex,
+                needsFilenameDecision: unresolved
+            )
+            try JSONEncoder().encode(metadata).write(
+                to: metadataURL(for: staged),
+                options: .atomic
+            )
+            return staged
+        } catch {
+            try? FileManager.default.removeItem(at: staged)
+            try? FileManager.default.removeItem(at: metadataURL(for: staged))
+            throw error
+        }
+    }
+
+    /// Generated only for local staging. Never silently accepted as the
+    /// original filename; collision handling for the approved final name
+    /// remains in ArchiveViewModel.
+    private static func temporaryPlaceholder(
+        for typeIdentifier: String
+    ) -> String {
+        let type = UTType(typeIdentifier)
+        let fileExtension = type?.preferredFilenameExtension ??
+            (type?.conforms(to: .movie) == true ? "mov" : "jpg")
+        let marker = String(
+            UUID().uuidString.replacingOccurrences(
+                of: "-", with: ""
+            ).prefix(12)
+        )
+        return "FileMann-待命名-\(marker).\(fileExtension)"
+    }
+
+    static func discardStagedFile(_ url: URL) throws {
+        let manager = FileManager.default
+        if manager.fileExists(atPath: url.path) {
+            try manager.removeItem(at: url)
+        }
+        let metadata = metadataURL(for: url)
+        if manager.fileExists(atPath: metadata.path) {
+            try manager.removeItem(at: metadata)
+        }
+    }
+
     /// The UUID prefix is used only inside the staging inbox to allow two
     /// photos with the same filename to coexist. It is removed at import.
     static func stage(

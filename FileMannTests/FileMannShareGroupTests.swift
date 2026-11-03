@@ -182,6 +182,139 @@ final class FileMannShareGroupTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: staged), payload)
     }
 
+    func testUnnamedItem29StagesAndAppearsInQueueMetadata() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let inbox = root.appendingPathComponent("FileMann-Share-Inbox")
+        try FileManager.default.createDirectory(
+            at: inbox, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let source = root.appendingPathComponent("shared-media.mp4")
+        let bytes = Data(repeating: 0x66, count: 2048)
+        try bytes.write(to: source)
+
+        // Before this fix, this exact input throws and the 29th selected
+        // photo/video disappears from an otherwise successful large share.
+        let staged = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: "shared-media.mp4",
+            typeIdentifier: "public.mpeg-4",
+            selectionIndex: 29,
+            in: inbox
+        )
+        let originalName = staged.lastPathComponent
+            .components(separatedBy: "__").dropFirst()
+            .joined(separator: "__")
+        XCTAssertTrue(
+            FileMannShareFileNaming.isGeneratedPlaceholderName(originalName)
+        )
+        XCTAssertEqual(try Data(contentsOf: staged), bytes)
+        XCTAssertTrue(FileMannShared.isSupportedMediaFile(staged))
+
+        let metadata = FileMannShareFileNaming.readMetadata(for: staged)
+        XCTAssertEqual(metadata?.selectionIndex, 29)
+        XCTAssertEqual(metadata?.needsFilenameDecision, true)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: FileMannShareFileNaming.metadataURL(
+                for: staged
+            ).path
+        ))
+
+        var task = ArchiveTask(
+            bookmark: Data(),
+            displayName: originalName,
+            remoteFileName: originalName,
+            fileSize: Int64(bytes.count),
+            sourceModifiedAt: nil
+        )
+        task.isShareStaging = true
+        task.shareFilenameDecision = .pending
+        task.shareSelectionIndex = metadata?.selectionIndex
+
+        let restored = try JSONDecoder().decode(
+            ArchiveTask.self,
+            from: JSONEncoder().encode(task)
+        )
+        XCTAssertTrue(restored.needsShareFilenameDecision)
+        XCTAssertEqual(restored.shareSelectionIndex, 29)
+        XCTAssertEqual(restored.completionDescription, "待确认文件名")
+
+        // Clearing a Share staging copy must not touch its source in Photos
+        // or Files, and must remove the associated metadata sidecar.
+        try FileMannShareFileNaming.discardStagedFile(staged)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: FileMannShareFileNaming.metadataURL(
+                for: staged
+            ).path
+        ))
+    }
+
+    func testKnownFilenameStagesWithOriginalAndNoDecision() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = "猫猫🎞️ %20 原片.MOV"
+        let source = root.appendingPathComponent(original)
+        try Data("original".utf8).write(to: source)
+
+        let staged = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: original,
+            typeIdentifier: "com.apple.quicktime-movie",
+            selectionIndex: 212,
+            in: root
+        )
+        XCTAssertTrue(staged.lastPathComponent.hasSuffix("__" + original))
+        let metadata = FileMannShareFileNaming.readMetadata(for: staged)
+        XCTAssertEqual(metadata?.selectionIndex, 212)
+        XCTAssertEqual(metadata?.needsFilenameDecision, false)
+    }
+
+    func testUnnamedSharesGetDistinctLocalPlaceholders() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("shared-media.mp4")
+        try Data("A".utf8).write(to: source)
+        let first = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: "shared-media.mp4",
+            typeIdentifier: "public.mpeg-4",
+            selectionIndex: 29,
+            in: root
+        )
+        let second = try FileMannShareFileNaming.stageForQueue(
+            sourceURL: source,
+            suggestedName: "shared-media.mp4",
+            typeIdentifier: "public.mpeg-4",
+            selectionIndex: 30,
+            in: root
+        )
+        XCTAssertNotEqual(first, second)
+        XCTAssertEqual(
+            FileMannShareFileNaming.readMetadata(
+                for: first
+            )?.needsFilenameDecision,
+            true
+        )
+        XCTAssertEqual(
+            FileMannShareFileNaming.readMetadata(
+                for: second
+            )?.selectionIndex,
+            30
+        )
+    }
+
     func testLegacyArchiveTaskDecodesWithoutReceiptFields() throws {
         let task = ArchiveTask(
             bookmark: Data(),

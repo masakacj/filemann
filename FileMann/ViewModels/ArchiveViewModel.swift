@@ -27,6 +27,9 @@ final class ArchiveViewModel: ObservableObject {
     @Published var isConfigCenterSyncing = false
 
     private var worker: Task<Void, Never>?
+    /// Invalidates an archive startup that is suspended inside an await
+    /// when the entire task queue is cleared.
+    private var queueGeneration = 0
     private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var speedSampleDate = Date()
     private var speedSampleBytes: Int64 = 0
@@ -46,6 +49,20 @@ final class ArchiveViewModel: ObservableObject {
         self.settings = TaskStore.loadSettings()
         self.password = KeychainStore.loadPassword()
         self.webDAVPassword = KeychainStore.loadWebDAVPassword()
+
+        // Older app versions may have already queued synthetic share names.
+        // Do not silently upload them before the user chooses a filename.
+        for index in tasks.indices {
+            if tasks[index].isShareStaging == true,
+               tasks[index].state != .completed,
+               tasks[index].state != .skipped,
+               tasks[index].shareFilenameDecision == nil,
+               !FileMannShareFileNaming.isReliableOriginalFilename(
+                    tasks[index].displayName
+               ) {
+                tasks[index].shareFilenameDecision = .pending
+            }
+        }
 
         if tasks.contains(where: {
             $0.state == .completed && $0.verifiedAt == nil
@@ -107,6 +124,10 @@ final class ArchiveViewModel: ObservableObject {
         duplicateCandidates.filter { $0.decision == .unresolved }.count
     }
 
+    var unresolvedShareNamesCount: Int {
+        tasks.filter { $0.needsShareFilenameDecision }.count
+    }
+
     /// Imports shared-file references into the persistent queue without
     /// copying their bytes into FileMann's private media library.
     func importShareInbox() {
@@ -152,6 +173,11 @@ final class ArchiveViewModel: ObservableObject {
                 let displayName = parts.count > 1
                     ? parts.dropFirst().joined(separator: "__")
                     : fileKey
+                let metadata = FileMannShareFileNaming.readMetadata(for: url)
+                let requiresNaming = metadata?.needsFilenameDecision ??
+                    FileMannShareFileNaming.isGeneratedPlaceholderName(
+                        displayName
+                    )
                 let bookmark = try url.bookmarkData(
                     options: .minimalBookmark,
                     includingResourceValuesForKeys: nil,
@@ -166,6 +192,9 @@ final class ArchiveViewModel: ObservableObject {
                     sourceModifiedAt: values.contentModificationDate
                 )
                 task.isShareStaging = true
+                task.shareSelectionIndex = metadata?.selectionIndex
+                task.shareFilenameDecision = requiresNaming
+                    ? .pending : .original
                 tasks.append(task)
                 added += 1
             } catch {
@@ -177,7 +206,11 @@ final class ArchiveViewModel: ObservableObject {
         guard added > 0 else { return }
         invalidateVerification()
         persistTasks()
-        statusMessage = "已从相册分享导入 \(added) 项到持久化队列"
+        let unnamed = tasks.filter { $0.needsShareFilenameDecision }.count
+        statusMessage = "已从相册分享导入 \(added) 项；" +
+            (unnamed > 0
+                ? "\(unnamed) 项尚未确认文件名，请按相册序号和预览选择名称"
+                : "已加入持久化队列")
     }
 
     func addDocuments(_ urls: [URL]) {
@@ -527,18 +560,17 @@ final class ArchiveViewModel: ObservableObject {
         if settings.transport == .webDAV {
             WebDAVBackgroundUploadManager.shared.cancel(taskID: task.id)
         }
-        // Removing a shared upload should also remove its disposable stage,
-        // otherwise the next app activation would re-enqueue the file.
+        // Removing any share task (including a queued one) must discard
+        // its own staged copy and metadata. Otherwise the next app launch
+        // would silently recreate the removed task.
         if task.isShareStaging == true,
-           task.state == .completed,
-           task.verifiedAt != nil,
            let inbox = try? FileMannShareGroup.incomingDirectory(
-                createIfMissing: false
+               createIfMissing: false
            ),
            let url = try? resolveBookmark(task.bookmark),
            url.deletingLastPathComponent().standardizedFileURL ==
-                inbox.standardizedFileURL {
-            try? FileManager.default.removeItem(at: url)
+               inbox.standardizedFileURL {
+            try? FileMannShareFileNaming.discardStagedFile(url)
         }
         tasks.removeAll { $0.id == task.id }
         duplicateCandidates.removeAll { $0.taskID == task.id }
@@ -550,8 +582,8 @@ final class ArchiveViewModel: ObservableObject {
     /// Rename only the queued share import. The App Group staging filename
     /// and Photos original are unaffected; only the future NAS name changes.
     func renameQueuedSharedMedia(_ task: ArchiveTask, to proposed: String) {
-        guard !isRunning,
-              let index = tasks.firstIndex(where: { $0.id == task.id }),
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }),
+              (!isRunning || tasks[index].needsShareFilenameDecision),
               tasks[index].isShareStaging == true,
               [.queued, .failed, .missingSource]
                   .contains(tasks[index].state) else {
@@ -584,6 +616,7 @@ final class ArchiveViewModel: ObservableObject {
         }
         tasks[index].displayName = renamed
         tasks[index].remoteFileName = remoteName
+        tasks[index].shareFilenameDecision = .userRenamed
         tasks[index].remoteRelativePath = nil
         tasks[index].remoteEndpointURL = nil
         tasks[index].attemptedRemotePath = nil
@@ -598,6 +631,30 @@ final class ArchiveViewModel: ObservableObject {
         persistTasks()
         persistDuplicates()
         statusMessage = "归档文件名已改为 \(remoteName)，相册原件不受影响"
+    }
+
+    /// Explicit consent to use the temporary filename. The NAS collision
+    /// guard still adds (2), (3) instead of overwriting an existing file.
+    func approvePlaceholderName(for task: ArchiveTask) {
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }),
+              (!isRunning || tasks[index].needsShareFilenameDecision),
+              tasks[index].isShareStaging == true,
+              tasks[index].needsShareFilenameDecision,
+              [.queued, .failed, .missingSource].contains(
+                  tasks[index].state
+              ) else { return }
+
+        tasks[index].shareFilenameDecision = .placeholderApproved
+        tasks[index].state = .queued
+        tasks[index].transferredBytes = 0
+        tasks[index].errorMessage =
+            "已选择使用占位文件名；发生重名时自动追加数字后缀"
+        duplicateCandidates.removeAll { $0.taskID == task.id }
+        invalidateVerification()
+        persistTasks()
+        persistDuplicates()
+        statusMessage = "已确认占位文件名：" +
+            tasks[index].remoteFileName
     }
 
     /// Diagnose old success records without modifying any NAS or phone file.
@@ -716,6 +773,51 @@ final class ArchiveViewModel: ObservableObject {
         )
     }
 
+    /// Explicitly discard the complete local archive queue. This does not
+    /// delete any NAS object or the user's Photos originals. Only files
+    /// owned by FileMann's disposable App Group Incoming-Share directory
+    /// are purged, so importing will not re-add cleared entries on launch.
+    func clearAllTasks() {
+        queueGeneration += 1
+        worker?.cancel()
+        worker = nil
+        WebDAVBackgroundUploadManager.shared.cancelAll()
+        isRunning = false
+        bytesPerSecond = 0
+        UIApplication.shared.isIdleTimerDisabled = false
+        endBackgroundTask()
+
+        tasks.removeAll()
+        duplicateCandidates.removeAll()
+        invalidateVerification()
+        persistTasks()
+        persistDuplicates()
+
+        // The directory is exclusively owned by FileMann's Share Extension.
+        // No Photos library URL, source location, or NAS path is touched.
+        var cleanupFailures = 0
+        if let inbox = try? FileMannShareGroup.incomingDirectory(
+            createIfMissing: false
+        ), let urls = try? FileManager.default.contentsOfDirectory(
+            at: inbox,
+            includingPropertiesForKeys: nil
+        ) {
+            for url in urls {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                } catch {
+                    cleanupFailures += 1
+                }
+            }
+        }
+
+        statusMessage = cleanupFailures == 0
+            ? "已清空全部归档任务并请求取消正在进行的上传；" +
+              "NAS 已有文件和相册原件未删除"
+            : "任务已清空，但有 \(cleanupFailures) 个分享暂存文件无法清理，" +
+              "请稍后重试清理；NAS 和相册原件未删除"
+    }
+
     func clearCompleted() {
         let removedIDs = Set(tasks.filter {
             ($0.state == .completed && $0.verifiedAt != nil) ||
@@ -733,6 +835,7 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     private func startWebDAV(retryFailed: Bool = true) {
+        let generation = queueGeneration
         guard settings.isValid else {
             statusMessage = "请先配置 QNAP WebDAV 地址"
             isShowingSettings = true
@@ -772,12 +875,15 @@ final class ArchiveViewModel: ObservableObject {
         Task {
             do {
                 let service = try await makeReachableWebDAVService()
+                guard generation == queueGeneration else { return }
                 // Listing a WebDAV folder does not prove PUT/MOVE/DELETE
                 // permissions. Verify real archive writes before iOS stages
                 // an entire video for background upload.
                 let uploadMode = try await service.preferredUploadMode()
+                guard generation == queueGeneration else { return }
 
                 let foundNewDuplicates = try await scanForDuplicates(using: service)
+                guard generation == queueGeneration else { return }
                 if foundNewDuplicates || unresolvedDuplicateCount > 0 {
                     isShowingDuplicateReview = true
                     isRunning = false
@@ -786,9 +892,11 @@ final class ArchiveViewModel: ObservableObject {
                 }
 
                 try await applyResolvedDuplicates(using: service)
+                guard generation == queueGeneration else { return }
 
                 let manager = WebDAVBackgroundUploadManager.shared
                 let existingTaskIDs = await manager.activeTaskIDs()
+                guard generation == queueGeneration else { return }
                 manager.resumeAll()
 
                 // A background URLSession copies the entire upload file
@@ -798,6 +906,7 @@ final class ArchiveViewModel: ObservableObject {
                 var scheduled = 0
                 let capacity = max(0, 1 - existingTaskIDs.count)
                 for index in tasks.indices {
+                    guard generation == queueGeneration else { return }
                     guard scheduled < capacity else { break }
                     guard tasks[index].state == .queued else {
                         continue
@@ -811,14 +920,14 @@ final class ArchiveViewModel: ObservableObject {
 
                     do {
                         let snapshot = tasks[index]
-                        if snapshot.isShareStaging == true &&
-                            !FileMannShareFileNaming.isReliableOriginalFilename(
-                                snapshot.displayName
-                            ) {
-                            tasks[index].state = .failed
+                        if snapshot.needsShareFilenameDecision ||
+                            (snapshot.isShareStaging == true &&
+                             snapshot.shareFilenameDecision == nil &&
+                             !FileMannShareFileNaming.isReliableOriginalFilename(
+                                 snapshot.displayName
+                             )) {
                             tasks[index].errorMessage =
-                                "该相册分享任务的原文件名不可确认（旧版可能生成了占位名），" +
-                                "请先使用“修改上传文件名”填写真实文件名，不会擅自改名"
+                                "原文件名未知：请自定义名称或选择使用占位文件名"
                             continue
                         }
                         let sourceURL = try resolveBookmark(snapshot.bookmark)
@@ -857,6 +966,7 @@ final class ArchiveViewModel: ObservableObject {
                         tasks[index].remoteFileName = candidate.remoteFileName
                         tasks[index].remoteRelativePath = candidate.remoteRelativePath
                         try await service.prepareParentDirectory(for: finalPath)
+                        guard generation == queueGeneration else { return }
 
                         let partialPath = uploadMode == .atomicMove
                             ? finalPath + ".filemann-" + taskID.uuidString.lowercased() + ".partial"
@@ -901,7 +1011,12 @@ final class ArchiveViewModel: ObservableObject {
 
                 if scheduled > 0 || tasks.contains(where: { $0.state == .uploading }) {
                     statusMessage = "已交给 iOS 后台上传；可以锁屏或切换到其他 App"
+                } else if unresolvedShareNamesCount > 0 {
+                    isRunning = false
+                    statusMessage = "有 \(unresolvedShareNamesCount) 项待确认文件名，" +
+                        "请在列表里选择“自定义文件名”或“使用占位名”"
                 } else {
+                    isRunning = false
                     await finishWebDAVBatchIfPossible()
                 }
             } catch is CancellationError {
@@ -919,7 +1034,8 @@ final class ArchiveViewModel: ObservableObject {
         let candidates = tasks.filter {
             $0.state != .completed &&
             $0.state != .skipped &&
-            !knownTaskIDs.contains($0.id)
+            !knownTaskIDs.contains($0.id) &&
+            !$0.needsShareFilenameDecision
         }
 
         guard !candidates.isEmpty else { return false }
@@ -936,6 +1052,9 @@ final class ArchiveViewModel: ObservableObject {
                     task: task,
                     sourceURL: sourceURL
                 ) {
+                    guard tasks.contains(where: { $0.id == task.id }) else {
+                        return false
+                    }
                     duplicateCandidates.append(
                         DuplicateCandidate(
                             taskID: task.id,
@@ -1033,8 +1152,8 @@ final class ArchiveViewModel: ObservableObject {
                 }
 
                 Task { @MainActor in
-                    self?.isRunning = true
                     if let index = self?.tasks.firstIndex(where: { $0.id == taskID }) {
+                        self?.isRunning = true
                         self?.tasks[index].state = .uploading
                         self?.tasks[index].errorMessage = "iOS 后台上传中"
                     }
@@ -1122,9 +1241,10 @@ final class ArchiveViewModel: ObservableObject {
         guard settings.transport == .webDAV else { return }
 
         let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
-        guard !active.isEmpty else { return }
+        let matching = Set(tasks.filter { active.contains($0.id) }.map(\.id))
+        guard !matching.isEmpty else { return }
 
-        for index in tasks.indices where active.contains(tasks[index].id) {
+        for index in tasks.indices where matching.contains(tasks[index].id) {
             tasks[index].state = .uploading
             tasks[index].errorMessage = "iOS 后台上传中"
         }
@@ -1496,7 +1616,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         do {
-            try FileManager.default.removeItem(at: url)
+            try FileMannShareFileNaming.discardStagedFile(url)
             tasks[index].sourceDeleted = true
             tasks[index].errorMessage =
                 "已验证归档；分享暂存文件已清理，相册原件不受影响"

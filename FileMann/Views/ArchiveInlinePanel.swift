@@ -5,6 +5,8 @@ struct ArchiveInlinePanel: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
     @AppStorage("filemann.archive.panel.expanded")
     private var isExpanded = true
+    @State private var isConfirmingClearAll = false
+    @State private var showOnlyUnnamed = false
 
     var body: some View {
         if !viewModel.tasks.isEmpty {
@@ -91,6 +93,11 @@ struct ArchiveInlinePanel: View {
                         }
                         .font(.caption)
                     }
+                    Button("清空全部") {
+                        isConfirmingClearAll = true
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.red)
                 }
 
                 if viewModel.tasks.contains(where: {
@@ -131,8 +138,29 @@ struct ArchiveInlinePanel: View {
 
                 if isExpanded {
                     Divider()
+                    if viewModel.unresolvedShareNamesCount > 0 {
+                        HStack(spacing: 8) {
+                            Label(
+                                "\(viewModel.unresolvedShareNamesCount) 项待确认文件名",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            Spacer()
+                            Button(
+                                showOnlyUnnamed ? "显示全部" : "只看待命名"
+                            ) {
+                                showOnlyUnnamed.toggle()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .font(.caption)
+                    }
 
-                    ForEach(viewModel.tasks) { task in
+                    ForEach(showOnlyUnnamed && viewModel.unresolvedShareNamesCount > 0
+                        ? viewModel.tasks.filter {
+                            $0.needsShareFilenameDecision
+                        }
+                        : viewModel.tasks) { task in
                         ArchiveInlineTaskRow(task: task)
                             .environmentObject(viewModel)
                     }
@@ -140,6 +168,21 @@ struct ArchiveInlinePanel: View {
             }
             .padding(12)
             .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .confirmationDialog(
+                "清空所有传输任务？",
+                isPresented: $isConfirmingClearAll,
+                titleVisibility: .visible
+            ) {
+                Button("清空全部任务", role: .destructive) {
+                    viewModel.clearAllTasks()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(
+                    "将取消当前上传，清除全部队列记录和 FileMann 暂存媒体。" +
+                    "不会删除相册原件或 NAS 已有文件。"
+                )
+            }
         }
     }
 
@@ -212,6 +255,38 @@ private struct ArchiveInlineTaskRow: View {
                 }
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
+            }
+
+            if task.needsShareFilenameDecision {
+                HStack(alignment: .top, spacing: 8) {
+                    FileThumbnailView(bookmark: task.bookmark)
+                        .frame(width: 62, height: 62)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            task.shareSelectionIndex.map {
+                                "相册第 \($0) 项 · 文件名未知"
+                            } ?? "文件名未知 · 待处理",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption2.bold())
+                        .foregroundStyle(.orange)
+                        Text("请依据缩略图选择名称后再传输")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            Button("自定义文件名") {
+                                filenameDraft = task.displayName
+                                isRenaming = true
+                            }
+                            Button("使用占位名") {
+                                viewModel.approvePlaceholderName(for: task)
+                            }
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.bordered)
+                    }
+                }
             }
 
             if task.remoteFileName != task.displayName {
