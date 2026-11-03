@@ -156,6 +156,12 @@ final class ArchiveViewModel: ObservableObject {
         duplicateCandidates.filter { $0.decision == .unresolved }.count
     }
 
+    var selectableKeepNASDuplicateCount: Int {
+        DuplicateBatchSelection.selectableKeepNASCount(
+            candidates: duplicateCandidates, tasks: tasks
+        )
+    }
+
     var unresolvedShareNamesCount: Int {
         tasks.filter { $0.needsShareFilenameDecision }.count
     }
@@ -532,12 +538,19 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
-    func applyDecisionToAllUnresolved(_ decision: DuplicateDecision) {
-        for index in duplicateCandidates.indices where duplicateCandidates[index].decision == .unresolved {
-            duplicateCandidates[index].decision = decision
-        }
+    /// Change every not-yet-applied duplicate (including earlier pending
+    /// keep-phone / keep-both selections), but never rewrite finalized
+    /// records or touch NAS/files from the review screen.
+    func keepNASForAllPendingDuplicates() {
+        var updated = duplicateCandidates
+        let count = DuplicateBatchSelection.selectKeepNAS(
+            candidates: &updated, tasks: tasks
+        )
+        guard count > 0 else { return }
+        duplicateCandidates = updated
         persistDuplicates()
-        statusMessage = "重复项已处理，点“开始归档”继续"
+        statusMessage = "已将 \(count) 项重复文件设为只保留 NAS；" +
+            "开始归档后，须通过 NAS 严格校验才清理手机副本"
     }
 
     func start() {
@@ -1750,10 +1763,13 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive ||
-                tasks.contains(where: {
-                    $0.isShareStaging == true && !$0.sourceDeleted
-                }) {
+            if tasks.contains(where: {
+                $0.state == .completed &&
+                !$0.sourceDeleted &&
+                $0.shouldCleanupLocalCopy(
+                    defaultDeleteAfterArchive: settings.deleteAfterArchive
+                )
+            }) {
                 // Used only to safely clean local sources after a
                 // per-endpoint remote manifest check has passed.
                 let service = try WebDAVArchiveService(
@@ -1765,9 +1781,9 @@ final class ArchiveViewModel: ObservableObject {
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          (tasks[index].isShareStaging == true ||
-                            (settings.deleteAfterArchive &&
-                             tasks[index].shouldDeleteSource != false)) else {
+                          tasks[index].shouldCleanupLocalCopy(
+                              defaultDeleteAfterArchive: settings.deleteAfterArchive
+                          ) else {
                         continue
                     }
 
@@ -1880,17 +1896,20 @@ final class ArchiveViewModel: ObservableObject {
                 return
             }
 
-            if settings.deleteAfterArchive ||
-                tasks.contains(where: {
-                    $0.isShareStaging == true && !$0.sourceDeleted
-                }) {
+            if tasks.contains(where: {
+                $0.state == .completed &&
+                !$0.sourceDeleted &&
+                $0.shouldCleanupLocalCopy(
+                    defaultDeleteAfterArchive: settings.deleteAfterArchive
+                )
+            }) {
                 var deletionFailures = 0
                 for index in tasks.indices {
                     guard tasks[index].state == .completed,
                           !tasks[index].sourceDeleted,
-                          (tasks[index].isShareStaging == true ||
-                            (settings.deleteAfterArchive &&
-                             tasks[index].shouldDeleteSource != false)) else {
+                          tasks[index].shouldCleanupLocalCopy(
+                              defaultDeleteAfterArchive: settings.deleteAfterArchive
+                          ) else {
                         continue
                     }
 
