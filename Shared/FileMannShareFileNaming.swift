@@ -142,21 +142,68 @@ enum FileMannShareFileNaming {
         selectionIndex: Int,
         in inbox: URL
     ) throws -> URL {
+        // The provider's source may be a security-scoped URL. The signature
+        // probe and the copy must happen while this scope is open.
+        let scoped = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if scoped {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        // Never label transcoded JPEG bytes as a HEIC original. The share
+        // host controls which representations it vends; the extension
+        // cannot reverse a JPEG conversion by renaming the file.
+        let signature = try FileMannMediaRepresentation
+            .verifyOriginalRepresentation(
+                at: sourceURL,
+                typeIdentifier: typeIdentifier,
+                suggestedName: suggestedName
+            )
         let filename: String
         let unresolved: Bool
 
         do {
-            filename = try preferredName(
+            let suggestedCandidate = try preferredName(
                 suggestedName: suggestedName,
                 sourceFilename: sourceURL.lastPathComponent,
                 typeIdentifier: typeIdentifier
             )
+            if signature == .heic {
+                // Photos can claim JPG as its preferred display name even
+                // while the requested provider supplies actual HEIC bytes.
+                // A credible file URL with a HEIC original filename wins.
+                let sourceCandidate = try? preferredName(
+                    suggestedName: nil,
+                    sourceFilename: sourceURL.lastPathComponent,
+                    typeIdentifier: typeIdentifier
+                )
+                let sourceExt = ((sourceCandidate ?? "") as NSString)
+                    .pathExtension.lowercased()
+                let useSource = sourceExt == "heic" ||
+                    sourceExt == "heif"
+                let candidate = useSource
+                    ? sourceCandidate! : suggestedCandidate
+                let ext = (candidate as NSString).pathExtension.lowercased()
+                guard ext == "heic" || ext == "heif" else {
+                    throw NameError.originalFilenameUnavailable
+                }
+                filename = candidate
+            } else {
+                filename = suggestedCandidate
+            }
             unresolved = false
         } catch NameError.originalFilenameUnavailable {
-            filename = temporaryPlaceholder(for: typeIdentifier)
+            filename = temporaryPlaceholder(
+                for: typeIdentifier,
+                actualFormat: signature
+            )
             unresolved = true
         } catch NameError.invalidOriginalFilename {
-            filename = temporaryPlaceholder(for: typeIdentifier)
+            filename = temporaryPlaceholder(
+                for: typeIdentifier,
+                actualFormat: signature
+            )
             unresolved = true
         }
 
@@ -187,11 +234,19 @@ enum FileMannShareFileNaming {
     /// original filename; collision handling for the approved final name
     /// remains in ArchiveViewModel.
     private static func temporaryPlaceholder(
-        for typeIdentifier: String
+        for typeIdentifier: String,
+        actualFormat: FileMannMediaRepresentation.FileSignature = .other
     ) -> String {
         let type = UTType(typeIdentifier)
-        let fileExtension = type?.preferredFilenameExtension ??
-            (type?.conforms(to: .movie) == true ? "mov" : "jpg")
+        let fileExtension: String
+        switch actualFormat {
+        case .heic: fileExtension = "heic"
+        case .jpeg: fileExtension = "jpg"
+        case .png: fileExtension = "png"
+        case .other:
+            fileExtension = type?.preferredFilenameExtension ??
+                (type?.conforms(to: .movie) == true ? "mov" : "jpg")
+        }
         let marker = String(
             UUID().uuidString.replacingOccurrences(
                 of: "-", with: ""

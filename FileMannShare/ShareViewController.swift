@@ -18,6 +18,7 @@ final class ShareViewController: UIViewController {
         var received: Int
         var imported = 0
         var awaitingNames = 0
+        var jpegOnly = 0
         var unsupported = 0
         var failed = 0
         var firstErrors: [String] = []
@@ -132,6 +133,8 @@ final class ShareViewController: UIViewController {
                         "已暂存 \(summary.imported)/\(summary.received) 项；" +
                         "其中 \(summary.awaitingNames) 项待确认文件名；" +
                         "失败 \(summary.failed) 项、不支持 \(summary.unsupported) 项。" +
+                        (summary.jpegOnly > 0
+                            ? "\n另有 \(summary.jpegOnly) 项仅提供 JPEG。" : "") +
                         (detail.isEmpty ? "" : "\n" + detail) +
                         "\n已暂存内容不会因关闭面板丢失；" +
                         "请在相册重新选择剩余项目。"
@@ -147,8 +150,11 @@ final class ShareViewController: UIViewController {
 
                 info.text = "已加入 \(summary.imported) 项到持久化队列，" +
                     "其中 \(summary.awaitingNames) 项待确认文件名。" +
-                    "打开 FileMann 可根据相册序号和缩略图自定义名称，" +
-                    "或选择使用临时占位文件名。"
+                    (summary.jpegOnly > 0
+                        ? "\n有 \(summary.jpegOnly) 项仅提供 JPEG；" +
+                          "若来源为 HEIC，请在相册分享“选项 → 格式”改为“当前”后重传。"
+                        : "") +
+                    "\n打开 FileMann 可根据相册序号和缩略图确认名称。"
                 extensionContext?.completeRequest(
                     returningItems: [], completionHandler: nil
                 )
@@ -195,26 +201,26 @@ final class ShareViewController: UIViewController {
             batchProgress.progress =
                 Float(index) / Float(max(1, providers.count))
 
-            // Prefer the actual media representation, not a generic
-            // converted image or an unsupported text/file attachment.
-            let supported = provider.registeredTypeIdentifiers.filter {
-                guard let kind = UTType($0) else { return false }
-                return kind.conforms(to: .movie) ||
-                    kind.conforms(to: .image)
-            }
-            let identifier = supported.first {
-                $0 != UTType.image.identifier &&
-                    $0 != UTType.movie.identifier
-            } ?? supported.first
-            guard let identifier else {
+            // Prefer public.heic/public.heif over a compatibility JPEG
+            // even if Photos registered the JPEG representation first.
+            guard let selectedType = FileMannMediaRepresentation
+                .preferredTypeIdentifier(
+                    from: provider.registeredTypeIdentifiers
+                ) else {
                 summary.unsupported += 1
                 continue
             }
 
+            // This is not proof the original was HEIC: JPEG originals are
+            // legitimate too. It only tells the user when Photos provided
+            // no HEIC alternative to FileMann.
+            if selectedType == UTType.jpeg.identifier {
+                summary.jpegOnly += 1
+            }
+
             do {
-                let staged = try await stageMedia(
+                let staged = try await FileMannMediaRepresentation.stageProvider(
                     provider,
-                    typeIdentifier: identifier,
                     selectionIndex: processed,
                     inbox: inbox
                 )
@@ -238,61 +244,4 @@ final class ShareViewController: UIViewController {
         return summary
     }
 
-    /// NSItemProvider URLs may be invalid as soon as their callback returns.
-    /// Resolve the real source filename and stage the file *inside* the
-    /// callback. Photos providers that do not offer an in-place URL can
-    /// still supply a temporary file representation.
-    private func stageMedia(
-        _ provider: NSItemProvider,
-        typeIdentifier: String,
-        selectionIndex: Int,
-        inbox: URL
-    ) async throws -> URL {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<URL, Error>) in
-
-            provider.loadInPlaceFileRepresentation(
-                forTypeIdentifier: typeIdentifier
-            ) { url, _, _ in
-                if let url {
-                    do {
-                        let stored = try FileMannShareFileNaming.stageForQueue(
-                            sourceURL: url,
-                            suggestedName: provider.suggestedName,
-                            typeIdentifier: typeIdentifier,
-                            selectionIndex: selectionIndex,
-                            in: inbox
-                        )
-                        continuation.resume(returning: stored)
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                    return
-                }
-
-                provider.loadFileRepresentation(
-                    forTypeIdentifier: typeIdentifier
-                ) { temporaryURL, error in
-                    guard let temporaryURL else {
-                        continuation.resume(
-                            throwing: error ?? ShareError.providerFailed
-                        )
-                        return
-                    }
-                    do {
-                        let stored = try FileMannShareFileNaming.stageForQueue(
-                            sourceURL: temporaryURL,
-                            suggestedName: provider.suggestedName,
-                            typeIdentifier: typeIdentifier,
-                            selectionIndex: selectionIndex,
-                            in: inbox
-                        )
-                        continuation.resume(returning: stored)
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        }
-    }
 }
