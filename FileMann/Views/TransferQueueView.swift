@@ -3,6 +3,12 @@ import SwiftUI
 /// Persisted archive queue, independent from which media tab is open.
 struct TransferQueueView: View {
     @EnvironmentObject private var model: ArchiveViewModel
+    @State private var isShowingOriginalPicker = false
+    @State private var isShowingClearConfirmation = false
+    @State private var isShowingRename = false
+    @State private var renamingTask: ArchiveTask?
+    @State private var filenameDraft = ""
+    @State private var showOnlyUnnamed = false
 
     private var outstandingCount: Int {
         model.tasks.filter { task in
@@ -44,6 +50,15 @@ struct TransferQueueView: View {
                 }
 
                 Section {
+                    Button {
+                        isShowingOriginalPicker = true
+                    } label: {
+                        Label(
+                            "从相册导入原格式（优先 HEIC）",
+                            systemImage: "photo.on.rectangle.angled"
+                        )
+                    }
+
                     HStack {
                         Button {
                             model.start()
@@ -70,6 +85,23 @@ struct TransferQueueView: View {
                 }
 
                 Section("任务列表（\(model.tasks.count)）") {
+                    if model.unresolvedShareNamesCount > 0 {
+                        HStack {
+                            Label(
+                                "\(model.unresolvedShareNamesCount) 项待确认文件名",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            Spacer()
+                            Button(
+                                showOnlyUnnamed ? "显示全部" : "只看待命名"
+                            ) {
+                                showOnlyUnnamed.toggle()
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .font(.caption)
+                    }
                     if model.tasks.isEmpty {
                         ContentUnavailableView(
                             "暂无归档任务",
@@ -79,18 +111,51 @@ struct TransferQueueView: View {
                             )
                         )
                     }
-                    ForEach(model.tasks) { task in
+                    ForEach(
+                        showOnlyUnnamed && model.unresolvedShareNamesCount > 0
+                            ? model.tasks.filter {
+                                $0.needsShareFilenameDecision
+                            }
+                            : model.tasks
+                    ) { task in
                         VStack(alignment: .leading, spacing: 7) {
                             HStack {
                                 Text(task.displayName)
                                     .lineLimit(1)
                                 Spacer()
-                                Text(task.state.title)
+                                Text(task.completionDescription)
                                     .font(.caption)
                                     .foregroundStyle(
                                         task.state == .failed
                                             ? .red : .secondary
                                     )
+                            }
+                            if task.needsShareFilenameDecision {
+                                HStack(alignment: .top, spacing: 10) {
+                                    FileThumbnailView(bookmark: task.bookmark)
+                                        .frame(width: 64, height: 64)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(task.shareSelectionIndex.map {
+                                            "相册第 \($0) 项，原文件名不可确定"
+                                        } ?? "原文件名不可确定")
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.orange)
+                                        HStack {
+                                            Button("自定义文件名") {
+                                                renamingTask = task
+                                                filenameDraft = ""
+                                                isShowingRename = true
+                                            }
+                                            .buttonStyle(.bordered)
+                                            Button("使用占位名") {
+                                                model.approvePlaceholderName(for: task)
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                        .font(.caption2)
+                                    }
+                                }
                             }
                             ProgressView(value: task.progress)
                             HStack {
@@ -135,6 +200,11 @@ struct TransferQueueView: View {
                         Button("清理已完成任务") {
                             model.clearCompleted()
                         }
+                        if !model.tasks.isEmpty {
+                            Button("清空全部任务", role: .destructive) {
+                                isShowingClearConfirmation = true
+                            }
+                        }
                         Button("NAS / 配置中心设置") {
                             model.isShowingSettings = true
                         }
@@ -143,6 +213,52 @@ struct TransferQueueView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $isShowingOriginalPicker) {
+            OriginalPhotosPicker(
+                onProgress: { processed, total in
+                    model.statusMessage =
+                        "正在从相册导入原格式 \(processed)/\(total)…"
+                },
+                onBatchStaged: {
+                    model.importShareInbox()
+                },
+                onFinish: { imported, failed, errors in
+                    model.importShareInbox()
+                    let detail = errors.prefix(2).joined(separator: "\n")
+                    model.statusMessage =
+                        "原格式相册导入：成功 \(imported) 项，" +
+                        "失败 \(failed) 项。" +
+                        (detail.isEmpty ? "" : "\n" + detail)
+                    isShowingOriginalPicker = false
+                }
+            )
+        }
+        .alert("自定义原文件名", isPresented: $isShowingRename) {
+            TextField("完整文件名（含扩展名）", text: $filenameDraft)
+            Button("保存") {
+                if let task = renamingTask {
+                    model.renameQueuedSharedMedia(task, to: filenameDraft)
+                }
+                renamingTask = nil
+            }
+            Button("取消", role: .cancel) {
+                renamingTask = nil
+            }
+        } message: {
+            Text("只有你确认后才会用此名称传输；原件不会被重命名")
+        }
+        .confirmationDialog(
+            "确定清空全部传输任务？",
+            isPresented: $isShowingClearConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("清空全部任务", role: .destructive) {
+                model.clearAllTasks()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会取消当前上传并删除 FileMann 暂存任务；不删除相册原件和 NAS 已有文件")
         }
     }
 }
