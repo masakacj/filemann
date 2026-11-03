@@ -111,7 +111,8 @@ enum FileMannMediaRepresentation {
     static func stageProvider(
         _ provider: NSItemProvider,
         selectionIndex: Int,
-        inbox: URL
+        inbox: URL,
+        originalFilenameHint: String? = nil
     ) async throws -> URL {
         guard let identifier = preferredTypeIdentifier(
             from: provider.registeredTypeIdentifiers
@@ -127,7 +128,8 @@ enum FileMannMediaRepresentation {
                     do {
                         let staged = try FileMannShareFileNaming.stageForQueue(
                             sourceURL: url,
-                            suggestedName: provider.suggestedName,
+                            suggestedName: originalFilenameHint ??
+                                provider.suggestedName,
                             typeIdentifier: identifier,
                             selectionIndex: selectionIndex,
                             in: inbox
@@ -150,7 +152,8 @@ enum FileMannMediaRepresentation {
                     do {
                         let staged = try FileMannShareFileNaming.stageForQueue(
                             sourceURL: temporaryURL,
-                            suggestedName: provider.suggestedName,
+                            suggestedName: originalFilenameHint ??
+                                provider.suggestedName,
                             typeIdentifier: identifier,
                             selectionIndex: selectionIndex,
                             in: inbox
