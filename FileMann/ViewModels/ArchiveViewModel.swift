@@ -761,33 +761,55 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
-    /// Never verify a batch via whatever endpoint happens to be reachable
-    /// now. Only the server that performed each individual upload counts.
+    /// A successful upload always remains pinned to its original endpoint.
+    /// Group completed tasks by that endpoint and parent directory so the
+    /// final manifest needs a single PROPFIND per directory rather than
+    /// N repeated listings (which can contain thousands of HEIC files).
     private func verifyRecordedWebDAVManifest() async -> BatchVerification {
         let expected = tasks.filter { $0.state != .skipped }
-        var count = 0
-        var verifiedBytes: Int64 = 0
-
-        for snapshot in expected {
-            guard snapshot.state == .completed,
-                  snapshot.verifiedAt != nil,
-                  let baseURL = snapshot.remoteEndpointURL,
-                  let path = snapshot.remoteVerifiedPath else {
-                continue
+        let completed = expected.compactMap { task -> (
+            endpoint: String, path: String, bytes: Int64
+        )? in
+            guard task.state == .completed,
+                  task.verifiedAt != nil,
+                  let endpoint = task.remoteEndpointURL,
+                  let path = task.remoteVerifiedPath else {
+                return nil
             }
+            return (
+                endpoint: endpoint,
+                path: path,
+                bytes: task.fileSize
+            )
+        }
+
+        var verifiedCount = 0
+        var verifiedBytes: Int64 = 0
+        let byEndpoint = Dictionary(grouping: completed) {
+            $0.endpoint
+        }
+
+        for (endpoint, entries) in byEndpoint {
             do {
                 let service = try WebDAVArchiveService(
                     settings: settings,
                     password: webDAVPassword,
-                    baseURLString: baseURL
+                    baseURLString: endpoint
                 )
-                let result = try await service.verifyPublishedFile(
-                    at: path,
-                    expectedBytes: snapshot.fileSize
+                let verified = await service.verifyPublishedBatch(
+                    entries.map { (
+                        path: $0.path, expectedBytes: $0.bytes
+                    ) }
                 )
-                count += 1
-                verifiedBytes += result.remoteSize
+                for item in entries {
+                    if verified[item.path] == item.bytes {
+                        verifiedCount += 1
+                        verifiedBytes += item.bytes
+                    }
+                }
             } catch {
+                // Never fall back to a different local/WAN endpoint when
+                // checking the recorded upload's actual storage path.
                 continue
             }
         }
@@ -797,7 +819,7 @@ final class ArchiveViewModel: ObservableObject {
             expectedBytes: expected.reduce(Int64(0)) {
                 $0 + $1.fileSize
             },
-            verifiedCount: count,
+            verifiedCount: verifiedCount,
             verifiedBytes: verifiedBytes,
             checkedAt: Date()
         )
