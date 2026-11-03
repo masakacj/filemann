@@ -67,7 +67,7 @@ struct TransferQueueView: View {
                             .foregroundStyle(.secondary)
                         }
 
-                        if model.activeWebDAVEndpoint?.hasPrefix("本地") == true {
+                        if model.usesLocalLANTransfer {
                             Label(
                                 "局域网自动并发：最多 4 路小文件传输；" +
                                 "中等文件最多 2 路，大于 64 MiB 的视频仍单独上传。",
@@ -75,7 +75,7 @@ struct TransferQueueView: View {
                             )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                        } else if model.activeWebDAVEndpoint?.hasPrefix("远程") == true {
+                        } else if model.activeWebDAVEndpoint != nil {
                             Label(
                                 "正在使用远程 WebDAV（最多 2 路）；若 iPhone 与 NAS 在同一 Wi-Fi，" +
                                 "配置可达的本地 WebDAV 地址通常能减少公网绕行。",
