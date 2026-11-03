@@ -1,3 +1,4 @@
+import Photos
 import PhotosUI
 import SwiftUI
 import UIKit
@@ -23,9 +24,12 @@ struct OriginalPhotosPicker: UIViewControllerRepresentable {
     func makeUIViewController(
         context: Context
     ) -> PHPickerViewController {
-        var config = PHPickerConfiguration()
+        var config = PHPickerConfiguration(
+            photoLibrary: PHPhotoLibrary.shared()
+        )
         config.filter = .any(of: [.images, .videos])
         config.selectionLimit = 0
+        config.selection = .ordered
         config.preferredAssetRepresentationMode = .current
 
         let picker = PHPickerViewController(configuration: config)
