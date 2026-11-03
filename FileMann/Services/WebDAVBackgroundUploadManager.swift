@@ -24,6 +24,8 @@ final class WebDAVBackgroundUploadManager: NSObject {
     // Do not tell UIKit that all background callbacks have been processed
     // while an asynchronous NAS MOVE + parent PROPFIND is still running.
     private let pendingFinalizations = DispatchGroup()
+    private let finalizingLock = NSLock()
+    private var finalizingTaskIDs = Set<UUID>()
     private lazy var session: URLSession = makeSession()
 
     private override init() {
@@ -103,11 +105,32 @@ final class WebDAVBackgroundUploadManager: NSObject {
     }
 
     func activeTaskIDs() async -> Set<UUID> {
-        let tasks: [URLSessionTask] = await withCheckedContinuation { continuation in
+        let tasks: [URLSessionTask] = await withCheckedContinuation {
+            continuation in
             session.getAllTasks { continuation.resume(returning: $0) }
         }
-
+        // URLSession removes an upload task before its asynchronous NAS
+        // MOVE/PROPFIND finalization finishes. Treat it as in-flight until
+        // the verified receipt is written, so the next staged HEIC cannot
+        // bypass equal-size duplicate checks.
         return Set(tasks.compactMap { descriptor(for: $0)?.taskID })
+            .union(pendingFinalizingIDs())
+    }
+
+    private func pendingFinalizingIDs() -> Set<UUID> {
+        finalizingLock.lock()
+        defer { finalizingLock.unlock() }
+        return finalizingTaskIDs
+    }
+
+    private func markFinalizing(_ id: UUID, active: Bool) {
+        finalizingLock.lock()
+        defer { finalizingLock.unlock() }
+        if active {
+            finalizingTaskIDs.insert(id)
+        } else {
+            finalizingTaskIDs.remove(id)
+        }
     }
 
     /// Re-attach to tasks held by iOS's background transfer daemon.
@@ -354,8 +377,12 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
         }
 
         pendingFinalizations.enter()
+        markFinalizing(descriptor.taskID, active: true)
         Task {
-            defer { pendingFinalizations.leave() }
+            defer {
+                markFinalizing(descriptor.taskID, active: false)
+                pendingFinalizations.leave()
+            }
             do {
                 let settings = TaskStore.loadSettings()
                 let password = KeychainStore.loadWebDAVPassword()
