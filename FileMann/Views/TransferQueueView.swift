@@ -34,6 +34,18 @@ struct TransferQueueView: View {
                                 .foregroundStyle(.secondary)
                         }
                         ProgressView(value: model.overallProgress)
+                        if model.isRunning {
+                            let stagedCount = model.tasks.filter {
+                                $0.state == .uploading
+                            }.count
+                            Label(
+                                "已提交系统后台：\(stagedCount) 项；" +
+                                "锁屏或切换 App 可以继续，手动上划强制关闭会中断",
+                                systemImage: "iphone.gen3.radiowaves.left.and.right"
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
                         HStack {
                             Label(
                                 "\(outstandingCount) 项待处理",

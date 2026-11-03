@@ -21,6 +21,11 @@ final class WebDAVBackgroundUploadManager: NSObject {
     static let sessionIdentifier = "com.masakacj.filemann.webdav.background"
 
     private var backgroundCompletionHandler: (() -> Void)?
+    // Do not tell UIKit that all background callbacks have been processed
+    // while an asynchronous NAS MOVE + parent PROPFIND is still running.
+    private let pendingFinalizations = DispatchGroup()
+    private let finalizingLock = NSLock()
+    private var finalizingTaskIDs = Set<UUID>()
     private lazy var session: URLSession = makeSession()
 
     private override init() {
@@ -100,11 +105,39 @@ final class WebDAVBackgroundUploadManager: NSObject {
     }
 
     func activeTaskIDs() async -> Set<UUID> {
-        let tasks: [URLSessionTask] = await withCheckedContinuation { continuation in
+        let tasks: [URLSessionTask] = await withCheckedContinuation {
+            continuation in
             session.getAllTasks { continuation.resume(returning: $0) }
         }
-
+        // URLSession removes an upload task before its asynchronous NAS
+        // MOVE/PROPFIND finalization finishes. Treat it as in-flight until
+        // the verified receipt is written, so the next staged HEIC cannot
+        // bypass equal-size duplicate checks.
         return Set(tasks.compactMap { descriptor(for: $0)?.taskID })
+            .union(pendingFinalizingIDs())
+    }
+
+    private func pendingFinalizingIDs() -> Set<UUID> {
+        finalizingLock.lock()
+        defer { finalizingLock.unlock() }
+        return finalizingTaskIDs
+    }
+
+    private func markFinalizing(_ id: UUID, active: Bool) {
+        finalizingLock.lock()
+        defer { finalizingLock.unlock() }
+        if active {
+            finalizingTaskIDs.insert(id)
+        } else {
+            finalizingTaskIDs.remove(id)
+        }
+    }
+
+    /// Re-attach to tasks held by iOS's background transfer daemon.
+    /// Lazy session construction alone is insufficient on a background
+    /// relaunch because the UI might never be presented.
+    func reconnectBackgroundSession() {
+        _ = session
     }
 
     func setBackgroundCompletionHandler(
@@ -116,6 +149,9 @@ final class WebDAVBackgroundUploadManager: NSObject {
             return
         }
         backgroundCompletionHandler = completionHandler
+        // Apple requires the same session identifier to be re-created
+        // before it can replay completion/credential delegate events.
+        reconnectBackgroundSession()
     }
 
     private func makeSession() -> URLSession {
@@ -127,7 +163,8 @@ final class WebDAVBackgroundUploadManager: NSObject {
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
         configuration.allowsCellularAccess = !settings.webDAVWiFiOnly
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost =
+            WebDAVUploadSchedulingPolicy.maximumHTTPConnections
         configuration.timeoutIntervalForResource = 60 * 60 * 24 * 7
 
         let queue = OperationQueue()
@@ -150,6 +187,11 @@ final class WebDAVBackgroundUploadManager: NSObject {
     }
 
     private func postFailure(taskID: UUID, message: String) {
+        // A callback may arrive before any SwiftUI view model or observer
+        // exists after an iOS system relaunch.
+        try? WebDAVBackgroundReceiptStore.save(
+            .failed(taskID: taskID, message: message)
+        )
         NotificationCenter.default.post(
             name: .fileMannWebDAVFailed,
             object: nil,
@@ -334,7 +376,13 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
             return
         }
 
+        pendingFinalizations.enter()
+        markFinalizing(descriptor.taskID, active: true)
         Task {
+            defer {
+                markFinalizing(descriptor.taskID, active: false)
+                pendingFinalizations.leave()
+            }
             do {
                 let settings = TaskStore.loadSettings()
                 let password = KeychainStore.loadWebDAVPassword()
@@ -353,6 +401,17 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
                     uploadMode: descriptor.uploadMode ?? .atomicMove
                 )
 
+                // The journal is written BEFORE the in-process notification.
+                // If iOS suspends the app before its ViewModel processes the
+                // callback, the verified result survives the next launch.
+                try WebDAVBackgroundReceiptStore.save(
+                    .verified(
+                        taskID: descriptor.taskID,
+                        endpoint: descriptor.baseURLString,
+                        path: result.remotePath,
+                        size: result.remoteSize
+                    )
+                )
                 NotificationCenter.default.post(
                     name: .fileMannWebDAVCompleted,
                     object: nil,
@@ -373,7 +432,7 @@ extension WebDAVBackgroundUploadManager: URLSessionTaskDelegate, URLSessionDeleg
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        DispatchQueue.main.async {
+        pendingFinalizations.notify(queue: .main) {
             let handler = self.backgroundCompletionHandler
             self.backgroundCompletionHandler = nil
             handler?()

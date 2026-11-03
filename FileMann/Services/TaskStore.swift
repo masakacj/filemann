@@ -6,6 +6,7 @@ enum TaskStore {
     private static let locationsKey = "filemann.source.locations.v1"
     private static let duplicatesKey = "filemann.duplicate.candidates.v1"
     private static let verificationKey = "filemann.last.verification.v1"
+    private static let autoResumeKey = "filemann.background.resume.intent.v1"
 
     // Durable, atomically-written queue; UserDefaults retained as a backup
     // and migration path from previous versions.
@@ -44,6 +45,17 @@ enum TaskStore {
             try? data.write(to: url, options: .atomic)
         }
         UserDefaults.standard.set(data, forKey: tasksKey)
+    }
+
+    /// A user-started batch remains eligible to resume when the user
+    /// reopens FileMann after iOS stops the process. User Pause/Clear sets
+    /// this false; it is not a background execution entitlement.
+    static func shouldResumeArchive() -> Bool {
+        UserDefaults.standard.bool(forKey: autoResumeKey)
+    }
+
+    static func setShouldResumeArchive(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: autoResumeKey)
     }
 
     static func loadSettings() -> SMBSettings {

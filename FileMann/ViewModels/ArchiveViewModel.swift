@@ -45,6 +45,7 @@ final class ArchiveViewModel: ObservableObject {
     private var checkedDuplicateTaskIDs = Set<UUID>()
     private var webDAVScheduling = false
     private var webDAVRefillRequested = false
+    private var isRecoveringOnForeground = false
 
     // URLSession can emit a callback every few KB. Throttle visual updates
     // and persist the transfer checkpoint only about once per second.
@@ -535,6 +536,7 @@ final class ArchiveViewModel: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
+        TaskStore.setShouldResumeArchive(true)
         // No SMB fallback: all new and restored tasks use the system-backed
         // WebDAV upload manager for local or remote transfer.
         settings.transport = .webDAV
@@ -546,6 +548,7 @@ final class ArchiveViewModel: ObservableObject {
 
     func pause() {
         if settings.transport == .webDAV {
+            TaskStore.setShouldResumeArchive(false)
             queueGeneration += 1
             resetWebDAVBatchCache()
             WebDAVBackgroundUploadManager.shared.suspendAll()
@@ -830,6 +833,7 @@ final class ArchiveViewModel: ObservableObject {
     /// owned by FileMann's disposable App Group Incoming-Share directory
     /// are purged, so importing will not re-add cleared entries on launch.
     func clearAllTasks() {
+        TaskStore.setShouldResumeArchive(false)
         queueGeneration += 1
         resetWebDAVBatchCache()
         worker?.cancel()
@@ -1011,7 +1015,15 @@ final class ArchiveViewModel: ObservableObject {
                     guard WebDAVUploadSchedulingPolicy.canSchedule(
                         fileSize: tasks[index].fileSize,
                         inFlightSizes: inFlightSizes
-                    ) else { break }
+                    ) else {
+                        if inFlightSizes.contains(tasks[index].fileSize) {
+                            // Two same-sized media need an intervening
+                            // NAS duplicate check; other distinct HEICs
+                            // can be handed to the daemon already.
+                            continue
+                        }
+                        break
+                    }
 
                     let taskID = tasks[index].id
                     if existingTaskIDs.contains(taskID) {
@@ -1324,6 +1336,9 @@ final class ArchiveViewModel: ObservableObject {
                         "已在实际上传端点的目录列表中确认文件"
                     self.cleanupShareStaging(at: index)
                     self.persistTasks()
+                    // Receipt can be discarded only after the normal task
+                    // store has the verified endpoint/path and file size.
+                    WebDAVBackgroundReceiptStore.remove(taskID: taskID)
                     // Inventory is only a duplicate-check cache; any
                     // newly queued file must see the updated NAS listing.
                     if self.webDAVBatchService?.baseURLString == endpoint {
@@ -1376,6 +1391,7 @@ final class ArchiveViewModel: ObservableObject {
                     self.tasks[index].errorMessage = "后台上传失败：\(message)"
                     self.lastProgressUIUpdate.removeValue(forKey: taskID)
                     self.persistTasks()
+                    WebDAVBackgroundReceiptStore.remove(taskID: taskID)
 
                     if !self.tasks.contains(where: { $0.state == .uploading }) {
                         self.isRunning = false
@@ -1386,18 +1402,217 @@ final class ArchiveViewModel: ObservableObject {
         )
     }
 
+    /// Reconcile durable verified results before inspecting URLSession
+    /// tasks. Background callbacks can arrive before SwiftUI observers are
+    /// installed, or the process may be suspended between a NAS MOVE and
+    /// updating the task store.
+    private func applyBackgroundReceipts() {
+        for receipt in WebDAVBackgroundReceiptStore.load() {
+            guard let index = tasks.firstIndex(where: {
+                $0.id == receipt.taskID
+            }) else {
+                WebDAVBackgroundReceiptStore.remove(
+                    taskID: receipt.taskID
+                )
+                continue
+            }
+
+            switch receipt.outcome {
+            case .verified:
+                guard receipt.matchesVerifiedUpload(tasks[index]),
+                      let endpoint = receipt.endpoint,
+                      let remotePath = receipt.remotePath,
+                      let bytes = receipt.remoteSize else {
+                    // Do not reuse a stale receipt after a rename, changed
+                    // endpoint or newly queued transfer under the same ID.
+                    WebDAVBackgroundReceiptStore.remove(
+                        taskID: receipt.taskID
+                    )
+                    continue
+                }
+                tasks[index].transferredBytes = bytes
+                tasks[index].remoteVerifiedPath = remotePath
+                tasks[index].remoteEndpointURL = endpoint
+                tasks[index].verifiedAt = receipt.recordedAt
+                tasks[index].completionKind = .uploaded
+                tasks[index].state = .completed
+                tasks[index].errorMessage =
+                    "后台归档完成：已恢复 NAS 严格落盘校验结果"
+                cleanupShareStaging(at: index)
+
+            case .failed:
+                if tasks[index].state != .completed {
+                    tasks[index].state = .failed
+                    tasks[index].errorMessage =
+                        "后台传输中断：" +
+                        (receipt.message ?? "请检查网络后重试")
+                }
+            }
+
+            // Never drop the journal before the task store was updated.
+            persistTasks()
+            WebDAVBackgroundReceiptStore.remove(
+                taskID: receipt.taskID
+            )
+        }
+    }
+
+    /// A background upload may have written a complete .partial object (or
+    /// the final direct-PUT target) when iOS stopped the app before the
+    /// async MOVE/PROPFIND receipt could be persisted. Re-verify only the
+    /// *recorded original endpoint* and own unique partial path before any
+    /// new upload; never infer success from an unrelated NAS share.
+    private func recoverInterruptedPublishedFiles() async {
+        let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
+        let snapshots = tasks.filter {
+            ($0.state == .paused || $0.state == .queued ||
+             $0.state == .failed) &&
+            !active.contains($0.id) &&
+            !$0.needsShareFilenameDecision &&
+            $0.verifiedAt == nil &&
+            $0.remoteEndpointURL != nil &&
+            $0.attemptedRemotePath != nil
+        }
+        guard !snapshots.isEmpty else { return }
+
+        var recovered = 0
+        for snapshot in snapshots {
+            guard let endpoint = snapshot.remoteEndpointURL,
+                  let finalPath = snapshot.attemptedRemotePath,
+                  let index = tasks.firstIndex(where: {
+                      $0.id == snapshot.id
+                  }) else { continue }
+
+            do {
+                let service = try WebDAVArchiveService(
+                    settings: settings,
+                    password: webDAVPassword,
+                    baseURLString: endpoint
+                )
+                let result: ArchiveResult
+                if let direct = try? await service.verifyPublishedFile(
+                    at: finalPath,
+                    expectedBytes: snapshot.fileSize
+                ) {
+                    result = direct
+                } else {
+                    let partialPath = finalPath + ".filemann-" +
+                        snapshot.id.uuidString.lowercased() + ".partial"
+                    // An incomplete partial MUST NOT be treated as done.
+                    guard (try? await service.verifyPublishedFile(
+                        at: partialPath,
+                        expectedBytes: snapshot.fileSize
+                    )) != nil else { continue }
+                    result = try await service.finalizeBackgroundUpload(
+                        partialPath: partialPath,
+                        finalPath: finalPath,
+                        expectedBytes: snapshot.fileSize,
+                        uploadMode: .atomicMove
+                    )
+                }
+
+                guard index < tasks.count,
+                      tasks[index].id == snapshot.id,
+                      tasks[index].remoteEndpointURL == endpoint,
+                      tasks[index].attemptedRemotePath == finalPath else {
+                    continue
+                }
+                tasks[index].state = .completed
+                tasks[index].transferredBytes = result.remoteSize
+                tasks[index].remoteVerifiedPath = result.remotePath
+                tasks[index].verifiedAt = Date()
+                tasks[index].completionKind = .uploaded
+                tasks[index].errorMessage =
+                    "从之前的后台传输恢复，已重新核实实际 NAS 路径"
+                cleanupShareStaging(at: index)
+                persistTasks()
+                recovered += 1
+            } catch {
+                // Keep the original task retryable. Do not count an
+                // unverified partial or a different endpoint as success.
+                continue
+            }
+        }
+
+        if recovered > 0 {
+            invalidateVerification()
+            statusMessage =
+                "已从中断的后台传输恢复 \(recovered) 项，" +
+                "均通过原上传端点的文件路径和大小校验"
+        }
+    }
+
+    /// Called only while the app is visible to the user. iOS controls when
+    /// it runs background tasks, so simply reopening FileMann may safely
+    /// restore a user-started queue, but an explicit Pause stays respected.
+    func resumeOnForegroundIfNeeded() {
+        guard !isRecoveringOnForeground else { return }
+        isRecoveringOnForeground = true
+
+        Task { @MainActor in
+            defer { isRecoveringOnForeground = false }
+            await restoreWebDAVBackgroundTasks()
+
+            guard TaskStore.shouldResumeArchive(), !isRunning,
+                  unresolvedDuplicateCount == 0 else {
+                return
+            }
+
+            await recoverInterruptedPublishedFiles()
+
+            let hasPending = tasks.contains { task in
+                (task.state == .queued || task.state == .paused) &&
+                !task.needsShareFilenameDecision
+            }
+            if !hasPending {
+                // iOS may have completed the final background uploads
+                // while FileMann was not visible. Close the batch and
+                // clear the resume intent once all receipts are restored.
+                if !tasks.contains(where: {
+                    $0.state == .uploading ||
+                    $0.state == .paused ||
+                    $0.state == .queued
+                }) {
+                    await finishWebDAVBatchIfPossible()
+                }
+                return
+            }
+
+            for index in tasks.indices where tasks[index].state == .paused {
+                tasks[index].state = .queued
+                tasks[index].errorMessage =
+                    "从上次系统后台中断后继续排队"
+            }
+            persistTasks()
+            startWebDAV(retryFailed: false)
+        }
+    }
+
     private func restoreWebDAVBackgroundTasks() async {
         guard settings.transport == .webDAV else { return }
 
+        // Creating the same background session identifier is required even
+        // on a cold start with no visible UIKit scene.
+        WebDAVBackgroundUploadManager.shared.reconnectBackgroundSession()
+        applyBackgroundReceipts()
+
         let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
+        applyBackgroundReceipts()
         let matching = Set(tasks.filter { active.contains($0.id) }.map(\.id))
         guard !matching.isEmpty else { return }
 
+        let userStillWantsTransfer = TaskStore.shouldResumeArchive()
         for index in tasks.indices where matching.contains(tasks[index].id) {
-            tasks[index].state = .uploading
-            tasks[index].errorMessage = "iOS 后台上传中"
+            if tasks[index].state != .completed {
+                tasks[index].state = userStillWantsTransfer
+                    ? .uploading : .paused
+                tasks[index].errorMessage = userStillWantsTransfer
+                    ? "iOS 后台上传任务已恢复"
+                    : "已暂停，等待用户手动继续"
+            }
         }
-        isRunning = true
+        isRunning = userStillWantsTransfer &&
+            tasks.contains(where: { $0.state == .uploading })
         persistTasks()
     }
 
@@ -1414,6 +1629,7 @@ final class ArchiveViewModel: ObservableObject {
 
         isRunning = false
         resetWebDAVBatchCache()
+        TaskStore.setShouldResumeArchive(false)
 
         if tasks.contains(where: {
             $0.state == .failed || $0.state == .missingSource

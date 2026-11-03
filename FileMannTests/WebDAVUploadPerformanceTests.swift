@@ -3,27 +3,32 @@ import XCTest
 @testable import FileMann
 
 final class WebDAVUploadPerformanceTests: XCTestCase {
-    func testTwoSmallHEICUploadsCanOverlapWithoutThirdStagedCopy() {
+    func testSmallHEICsArePreparedForBackgroundDaemonBeforeAppSuspends() {
         let size: Int64 = 4 * 1024 * 1024
         XCTAssertTrue(
             WebDAVUploadSchedulingPolicy.canSchedule(
                 fileSize: size, inFlightSizes: []
             )
         )
+        let staged = (0..<15).map { size + Int64($0) }
         XCTAssertTrue(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: size + 1,
-                inFlightSizes: [size]
+                fileSize: size + 16,
+                inFlightSizes: staged
             )
         )
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: size + 2,
-                inFlightSizes: [size, size + 1]
+                fileSize: size + 17,
+                inFlightSizes: staged + [size + 16]
             )
         )
-        // If a second item has exactly the same byte count, it might be
-        // a duplicate of the first. It must wait for a fresh NAS check.
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.maximumHTTPConnections, 2
+        )
+
+        // Equal-sized media could be identical duplicates. Wait until
+        // the first upload is verified before staging the second.
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
                 fileSize: size,
@@ -32,10 +37,22 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
         )
     }
 
+    func testBackgroundPrestageBytesRemainBounded() {
+        let largeHEIC: Int64 = 15 * 1024 * 1024
+        let staged = (0..<10).map { largeHEIC + Int64($0) }
+        XCTAssertFalse(
+            WebDAVUploadSchedulingPolicy.canSchedule(
+                fileSize: largeHEIC + 15,
+                inFlightSizes: staged
+            )
+        )
+    }
+
     func testLargeVideosNeverOverlapOrStageAlongsideSmallMedia() {
         let large =
             WebDAVUploadSchedulingPolicy.largeFileThresholdBytes + 1
         let heic: Int64 = 3 * 1024 * 1024
+        let separateLarge: Int64 = 20 * 1024 * 1024
 
         XCTAssertTrue(
             WebDAVUploadSchedulingPolicy.canSchedule(
@@ -52,11 +69,9 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
                 fileSize: large, inFlightSizes: [heic]
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: WebDAVUploadSchedulingPolicy
-                    .largeFileThresholdBytes,
-                inFlightSizes: [heic]
+                fileSize: separateLarge, inFlightSizes: [heic]
             )
         )
     }

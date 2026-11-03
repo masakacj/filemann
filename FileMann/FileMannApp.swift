@@ -37,10 +37,12 @@ struct FileMannApp: App {
                 .onAppear {
                     _ = try? FileMannShared.inboxDirectory()
                     viewModel.importShareInbox()
+                    viewModel.resumeOnForegroundIfNeeded()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active {
                         viewModel.importShareInbox()
+                        viewModel.resumeOnForegroundIfNeeded()
                     }
                 }
                 .task {
