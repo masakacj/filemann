@@ -140,7 +140,8 @@ final class WebDAVBackgroundUploadManager: NSObject {
         configuration.isDiscretionary = false
         configuration.waitsForConnectivity = true
         configuration.allowsCellularAccess = !settings.webDAVWiFiOnly
-        configuration.httpMaximumConnectionsPerHost = 2
+        configuration.httpMaximumConnectionsPerHost =
+            WebDAVUploadSchedulingPolicy.maximumHTTPConnections
         configuration.timeoutIntervalForResource = 60 * 60 * 24 * 7
 
         let queue = OperationQueue()
