@@ -1002,6 +1002,12 @@ final class ArchiveViewModel: ObservableObject {
                     guard tasks[index].state == .queued else {
                         continue
                     }
+                    if tasks[index].fileSize <= 0 {
+                        tasks[index].state = .failed
+                        tasks[index].errorMessage =
+                            "源文件大小为 0，已跳过空文件；不会阻塞其他媒体上传"
+                        continue
+                    }
                     guard WebDAVUploadSchedulingPolicy.canSchedule(
                         fileSize: tasks[index].fileSize,
                         inFlightSizes: inFlightSizes
