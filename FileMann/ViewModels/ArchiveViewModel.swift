@@ -610,6 +610,7 @@ final class ArchiveViewModel: ObservableObject {
         }
         tasks[index].displayName = renamed
         tasks[index].remoteFileName = remoteName
+        tasks[index].shareFilenameDecision = .userRenamed
         tasks[index].remoteRelativePath = nil
         tasks[index].remoteEndpointURL = nil
         tasks[index].attemptedRemotePath = nil
@@ -624,6 +625,30 @@ final class ArchiveViewModel: ObservableObject {
         persistTasks()
         persistDuplicates()
         statusMessage = "归档文件名已改为 \(remoteName)，相册原件不受影响"
+    }
+
+    /// Explicit consent to use the temporary filename. The NAS collision
+    /// guard still adds (2), (3) instead of overwriting an existing file.
+    func approvePlaceholderName(for task: ArchiveTask) {
+        guard !isRunning,
+              let index = tasks.firstIndex(where: { $0.id == task.id }),
+              tasks[index].isShareStaging == true,
+              tasks[index].needsShareFilenameDecision,
+              [.queued, .failed, .missingSource].contains(
+                  tasks[index].state
+              ) else { return }
+
+        tasks[index].shareFilenameDecision = .placeholderApproved
+        tasks[index].state = .queued
+        tasks[index].transferredBytes = 0
+        tasks[index].errorMessage =
+            "已选择使用占位文件名；发生重名时自动追加数字后缀"
+        duplicateCandidates.removeAll { $0.taskID == task.id }
+        invalidateVerification()
+        persistTasks()
+        persistDuplicates()
+        statusMessage = "已确认占位文件名：" +
+            tasks[index].remoteFileName
     }
 
     /// Diagnose old success records without modifying any NAS or phone file.
@@ -837,14 +862,14 @@ final class ArchiveViewModel: ObservableObject {
 
                     do {
                         let snapshot = tasks[index]
-                        if snapshot.isShareStaging == true &&
-                            !FileMannShareFileNaming.isReliableOriginalFilename(
-                                snapshot.displayName
-                            ) {
-                            tasks[index].state = .failed
+                        if snapshot.needsShareFilenameDecision ||
+                            (snapshot.isShareStaging == true &&
+                             snapshot.shareFilenameDecision == nil &&
+                             !FileMannShareFileNaming.isReliableOriginalFilename(
+                                 snapshot.displayName
+                             )) {
                             tasks[index].errorMessage =
-                                "该相册分享任务的原文件名不可确认（旧版可能生成了占位名），" +
-                                "请先使用“修改上传文件名”填写真实文件名，不会擅自改名"
+                                "原文件名未知：请自定义名称或选择使用占位文件名"
                             continue
                         }
                         let sourceURL = try resolveBookmark(snapshot.bookmark)
@@ -945,7 +970,8 @@ final class ArchiveViewModel: ObservableObject {
         let candidates = tasks.filter {
             $0.state != .completed &&
             $0.state != .skipped &&
-            !knownTaskIDs.contains($0.id)
+            !knownTaskIDs.contains($0.id) &&
+            !$0.needsShareFilenameDecision
         }
 
         guard !candidates.isEmpty else { return false }
