@@ -1,4 +1,6 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 import XCTest
 @testable import FileMann
 
@@ -50,6 +52,40 @@ final class MediaLibraryOrderingTests: XCTestCase {
                 items, by: .filenameDescending
             ).map(\.name),
             Array(expected.reversed())
+        )
+    }
+
+    func testExifShootingDateOverridesSameExportModificationTime() throws {
+        let folder = try testDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let earlier = folder.appendingPathComponent("IMG_99.JPG")
+        let later = folder.appendingPathComponent("IMG_1.JPG")
+        try makeJPEG(
+            at: earlier, originalDate: "2024:03:01 09:00:00"
+        )
+        try makeJPEG(
+            at: later, originalDate: "2024:03:02 12:30:00"
+        )
+        let sameExportTime = Date(timeIntervalSince1970: 1_783_025_400)
+        for file in [earlier, later] {
+            try FileManager.default.setAttributes(
+                [.modificationDate: sameExportTime],
+                ofItemAtPath: file.path
+            )
+        }
+
+        let items = try [earlier, later].map {
+            try XCTUnwrap(MediaItem(url: $0))
+        }
+        XCTAssertNotNil(items[0].capturedAt)
+        XCTAssertNotNil(items[1].capturedAt)
+        XCTAssertLessThan(items[0].preferredDate, items[1].preferredDate)
+        XCTAssertEqual(
+            MediaLibraryOrdering.sorted(
+                items, by: .shootingNewest
+            ).map(\.name),
+            ["IMG_1.JPG", "IMG_99.JPG"]
         )
     }
 
@@ -122,6 +158,38 @@ final class MediaLibraryOrderingTests: XCTestCase {
                 Array(items.reversed()), by: .shootingNewest
             ).map(\.id)
         )
+    }
+
+    private func makeJPEG(
+        at url: URL, originalDate: String
+    ) throws {
+        let context = try XCTUnwrap(CGContext(
+            data: nil,
+            width: 2,
+            height: 2,
+            bitsPerComponent: 8,
+            bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ))
+        let image = try XCTUnwrap(context.makeImage())
+        let destination = try XCTUnwrap(
+            CGImageDestinationCreateWithURL(
+                url as CFURL,
+                "public.jpeg" as CFString,
+                1, nil
+            )
+        )
+        let metadata: [String: Any] = [
+            kCGImagePropertyExifDictionary as String: [
+                kCGImagePropertyExifDateTimeOriginal as String:
+                    originalDate
+            ]
+        ]
+        CGImageDestinationAddImage(
+            destination, image, metadata as CFDictionary
+        )
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
     }
 
     private func testDirectory() throws -> URL {
