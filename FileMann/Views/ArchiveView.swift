@@ -4,6 +4,7 @@ import UIKit
 struct ArchiveView: View {
     @EnvironmentObject private var viewModel: ArchiveViewModel
     @State private var isConfirmingClearAll = false
+    @State private var showOnlyUnnamed = false
 
     var body: some View {
         NavigationStack {
@@ -35,7 +36,29 @@ struct ArchiveView: View {
                     .frame(maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(viewModel.tasks) { task in
+                        if viewModel.unresolvedShareNamesCount > 0 {
+                            HStack(spacing: 8) {
+                                Label(
+                                    "\(viewModel.unresolvedShareNamesCount) 项待确认文件名",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .foregroundStyle(.orange)
+                                Spacer()
+                                Button(
+                                    showOnlyUnnamed ? "显示全部" : "只看待命名"
+                                ) {
+                                    showOnlyUnnamed.toggle()
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            .font(.caption)
+                        }
+
+                        ForEach(showOnlyUnnamed
+                            ? viewModel.tasks.filter {
+                                $0.needsShareFilenameDecision
+                            }
+                            : viewModel.tasks) { task in
                             ArchiveTaskRow(task: task)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button(role: .destructive) {
