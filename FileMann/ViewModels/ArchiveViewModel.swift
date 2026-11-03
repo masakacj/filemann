@@ -1269,6 +1269,13 @@ final class ArchiveViewModel: ObservableObject {
                             .contains(self.tasks[index].state) else {
                         return
                     }
+                    // An in-flight URLSession callback may arrive just
+                    // after the user presses Pause. Never let that event
+                    // silently reactivate the task or refill the queue.
+                    if self.tasks[index].state == .paused &&
+                        !self.isRunning {
+                        return
+                    }
                     self.isRunning = true
                     if self.tasks[index].state != .uploading {
                         self.tasks[index].state = .uploading
