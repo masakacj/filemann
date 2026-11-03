@@ -45,6 +45,7 @@ final class ArchiveViewModel: ObservableObject {
     private var checkedDuplicateTaskIDs = Set<UUID>()
     private var webDAVScheduling = false
     private var webDAVRefillRequested = false
+    private var isRecoveringOnForeground = false
 
     // URLSession can emit a callback every few KB. Throttle visual updates
     // and persist the transfer checkpoint only about once per second.
@@ -535,6 +536,7 @@ final class ArchiveViewModel: ObservableObject {
 
     func start() {
         guard !isRunning else { return }
+        TaskStore.setShouldResumeArchive(true)
         // No SMB fallback: all new and restored tasks use the system-backed
         // WebDAV upload manager for local or remote transfer.
         settings.transport = .webDAV
@@ -546,6 +548,7 @@ final class ArchiveViewModel: ObservableObject {
 
     func pause() {
         if settings.transport == .webDAV {
+            TaskStore.setShouldResumeArchive(false)
             queueGeneration += 1
             resetWebDAVBatchCache()
             WebDAVBackgroundUploadManager.shared.suspendAll()
@@ -830,6 +833,7 @@ final class ArchiveViewModel: ObservableObject {
     /// owned by FileMann's disposable App Group Incoming-Share directory
     /// are purged, so importing will not re-add cleared entries on launch.
     func clearAllTasks() {
+        TaskStore.setShouldResumeArchive(false)
         queueGeneration += 1
         resetWebDAVBatchCache()
         worker?.cancel()
@@ -1414,6 +1418,7 @@ final class ArchiveViewModel: ObservableObject {
 
         isRunning = false
         resetWebDAVBatchCache()
+        TaskStore.setShouldResumeArchive(false)
 
         if tasks.contains(where: {
             $0.state == .failed || $0.state == .missingSource
