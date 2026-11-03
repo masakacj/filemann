@@ -200,9 +200,15 @@ enum FileMannShareFileNaming {
         return "FileMann-待命名-\(marker).\(fileExtension)"
     }
 
-    static func discardStagedFile(_ url: URL) {
-        try? FileManager.default.removeItem(at: url)
-        try? FileManager.default.removeItem(at: metadataURL(for: url))
+    static func discardStagedFile(_ url: URL) throws {
+        let manager = FileManager.default
+        if manager.fileExists(atPath: url.path) {
+            try manager.removeItem(at: url)
+        }
+        let metadata = metadataURL(for: url)
+        if manager.fileExists(atPath: metadata.path) {
+            try manager.removeItem(at: metadata)
+        }
     }
 
     /// The UUID prefix is used only inside the staging inbox to allow two
