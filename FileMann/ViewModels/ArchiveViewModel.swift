@@ -1328,6 +1328,9 @@ final class ArchiveViewModel: ObservableObject {
                         "已在实际上传端点的目录列表中确认文件"
                     self.cleanupShareStaging(at: index)
                     self.persistTasks()
+                    // Receipt can be discarded only after the normal task
+                    // store has the verified endpoint/path and file size.
+                    WebDAVBackgroundReceiptStore.remove(taskID: taskID)
                     // Inventory is only a duplicate-check cache; any
                     // newly queued file must see the updated NAS listing.
                     if self.webDAVBatchService?.baseURLString == endpoint {
@@ -1380,6 +1383,7 @@ final class ArchiveViewModel: ObservableObject {
                     self.tasks[index].errorMessage = "后台上传失败：\(message)"
                     self.lastProgressUIUpdate.removeValue(forKey: taskID)
                     self.persistTasks()
+                    WebDAVBackgroundReceiptStore.remove(taskID: taskID)
 
                     if !self.tasks.contains(where: { $0.state == .uploading }) {
                         self.isRunning = false
