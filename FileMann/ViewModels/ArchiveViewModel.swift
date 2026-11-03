@@ -1459,6 +1459,91 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
+    /// A background upload may have written a complete .partial object (or
+    /// the final direct-PUT target) when iOS stopped the app before the
+    /// async MOVE/PROPFIND receipt could be persisted. Re-verify only the
+    /// *recorded original endpoint* and own unique partial path before any
+    /// new upload; never infer success from an unrelated NAS share.
+    private func recoverInterruptedPublishedFiles() async {
+        let active = await WebDAVBackgroundUploadManager.shared.activeTaskIDs()
+        let snapshots = tasks.filter {
+            ($0.state == .paused || $0.state == .queued ||
+             $0.state == .failed) &&
+            !active.contains($0.id) &&
+            !$0.needsShareFilenameDecision &&
+            $0.verifiedAt == nil &&
+            $0.remoteEndpointURL != nil &&
+            $0.attemptedRemotePath != nil
+        }
+        guard !snapshots.isEmpty else { return }
+
+        var recovered = 0
+        for snapshot in snapshots {
+            guard let endpoint = snapshot.remoteEndpointURL,
+                  let finalPath = snapshot.attemptedRemotePath,
+                  let index = tasks.firstIndex(where: {
+                      $0.id == snapshot.id
+                  }) else { continue }
+
+            do {
+                let service = try WebDAVArchiveService(
+                    settings: settings,
+                    password: webDAVPassword,
+                    baseURLString: endpoint
+                )
+                let result: ArchiveResult
+                if let direct = try? await service.verifyPublishedFile(
+                    at: finalPath,
+                    expectedBytes: snapshot.fileSize
+                ) {
+                    result = direct
+                } else {
+                    let partialPath = finalPath + ".filemann-" +
+                        snapshot.id.uuidString.lowercased() + ".partial"
+                    // An incomplete partial MUST NOT be treated as done.
+                    guard (try? await service.verifyPublishedFile(
+                        at: partialPath,
+                        expectedBytes: snapshot.fileSize
+                    )) != nil else { continue }
+                    result = try await service.finalizeBackgroundUpload(
+                        partialPath: partialPath,
+                        finalPath: finalPath,
+                        expectedBytes: snapshot.fileSize,
+                        uploadMode: .atomicMove
+                    )
+                }
+
+                guard index < tasks.count,
+                      tasks[index].id == snapshot.id,
+                      tasks[index].remoteEndpointURL == endpoint,
+                      tasks[index].attemptedRemotePath == finalPath else {
+                    continue
+                }
+                tasks[index].state = .completed
+                tasks[index].transferredBytes = result.remoteSize
+                tasks[index].remoteVerifiedPath = result.remotePath
+                tasks[index].verifiedAt = Date()
+                tasks[index].completionKind = .uploaded
+                tasks[index].errorMessage =
+                    "从之前的后台传输恢复，已重新核实实际 NAS 路径"
+                cleanupShareStaging(at: index)
+                persistTasks()
+                recovered += 1
+            } catch {
+                // Keep the original task retryable. Do not count an
+                // unverified partial or a different endpoint as success.
+                continue
+            }
+        }
+
+        if recovered > 0 {
+            invalidateVerification()
+            statusMessage =
+                "已从中断的后台传输恢复 \\(recovered) 项，" +
+                "均通过原上传端点的文件路径和大小校验"
+        }
+    }
+
     /// Called only while the app is visible to the user. iOS controls when
     /// it runs background tasks, so simply reopening FileMann may safely
     /// restore a user-started queue, but an explicit Pause stays respected.
@@ -1474,6 +1559,8 @@ final class ArchiveViewModel: ObservableObject {
                   unresolvedDuplicateCount == 0 else {
                 return
             }
+
+            await recoverInterruptedPublishedFiles()
 
             let hasPending = tasks.contains { task in
                 (task.state == .queued || task.state == .paused) &&
