@@ -18,6 +18,17 @@ struct WebDAVBackgroundReceipt: Codable, Equatable {
     let message: String?
     let recordedAt: Date
 
+    /// Only a receipt for the same task, exact upload endpoint, target
+    /// path and expected byte count can restore a verified archive.
+    func matchesVerifiedUpload(_ task: ArchiveTask) -> Bool {
+        outcome == .verified &&
+        taskID == task.id &&
+        endpoint == task.remoteEndpointURL &&
+        remotePath == task.attemptedRemotePath &&
+        remoteSize == task.fileSize &&
+        remoteSize != nil
+    }
+
     static func verified(
         taskID: UUID, endpoint: String, path: String,
         size: Int64
