@@ -14,6 +14,10 @@ enum WebDAVUploadSchedulingPolicy {
     ) -> Bool {
         guard fileSize > 0,
               inFlightSizes.count < maximumConcurrentSmallUploads,
+              // Byte-identical media must share a length. Keep same-sized
+              // uploads serial so duplicate checking can see the first
+              // verified NAS copy before scheduling the next.
+              !inFlightSizes.contains(fileSize),
               !inFlightSizes.contains(where: {
                   $0 > largeFileThresholdBytes
               }) else {
