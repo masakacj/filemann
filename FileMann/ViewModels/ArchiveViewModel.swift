@@ -44,6 +44,10 @@ final class ArchiveViewModel: ObservableObject {
     private var webDAVBatchSettings: SMBSettings?
     private var webDAVBatchPassword: String?
     private var checkedDuplicateTaskIDs = Set<UUID>()
+    // Which queued tasks were actually duplicate-checked during this
+    // scheduling pass. A BG wake scans only a bounded next window, so
+    // unchecked media must never bypass full NAS duplicate detection.
+    private var scannedDuplicateTaskIDsThisPass = Set<UUID>()
     // Only hash small/medium same-sized files that could overlap on LAN.
     // A byte-identical local peer must wait for NAS verification and the
     // duplicate-review flow; size alone is not proof of identical content.
@@ -63,6 +67,7 @@ final class ArchiveViewModel: ObservableObject {
         webDAVBatchSettings = nil
         webDAVBatchPassword = nil
         checkedDuplicateTaskIDs.removeAll()
+        scannedDuplicateTaskIDsThisPass.removeAll()
         sourceFingerprintCache.removeAll()
         lastProgressUIUpdate.removeAll()
         webDAVRefillRequested = false
@@ -1043,6 +1048,17 @@ final class ArchiveViewModel: ObservableObject {
                     guard tasks[index].state == .queued else {
                         continue
                     }
+                    // During an opportunistic iOS wake, scan only the
+                    // next manageable segment instead of every remaining
+                    // item. Never submit a task not checked in this pass,
+                    // except a batch-unique size already checked earlier.
+                    guard scannedDuplicateTaskIDsThisPass.contains(
+                        tasks[index].id
+                    ) || checkedDuplicateTaskIDs.contains(
+                        tasks[index].id
+                    ) else {
+                        continue
+                    }
                     if tasks[index].fileSize <= 0 {
                         tasks[index].state = .failed
                         tasks[index].errorMessage =
@@ -1266,14 +1282,21 @@ final class ArchiveViewModel: ObservableObject {
             }.map { ($0.fileSize, 1) },
             uniquingKeysWith: +
         )
-        let candidates = tasks.filter {
+        scannedDuplicateTaskIDsThisPass.removeAll()
+        // The first foreground start can review all duplicates together.
+        // A short system wake should examine only the next 64 candidates;
+        // the rest stay queued until the next refill, never unchecked PUT.
+        let limit = UIApplication.shared.applicationState == .active
+            ? Int.max
+            : WebDAVUploadSchedulingPolicy.maximumPreparedSmallUploads
+        let candidates = Array(tasks.filter {
             [.queued, .paused, .failed, .missingSource]
                 .contains($0.state) &&
             !activeTaskIDs.contains($0.id) &&
             !knownTaskIDs.contains($0.id) &&
             !checkedDuplicateTaskIDs.contains($0.id) &&
             !$0.needsShareFilenameDecision
-        }
+        }.prefix(limit))
 
         guard !candidates.isEmpty else { return false }
 
@@ -1303,10 +1326,10 @@ final class ArchiveViewModel: ObservableObject {
                     found = true
                     persistDuplicates()
                 }
-                // Unique-sized batch items cannot be byte-identical to
-                // another selected file. Reuse their negative scan; when
-                // sizes repeat, recheck after the first upload publishes,
-                // so intra-batch duplicates still reach review.
+                // A successful negative check unlocks only this pass.
+                // Same-sized files are checked again after a newly
+                // published peer appears, avoiding intra-batch duplicates.
+                scannedDuplicateTaskIDsThisPass.insert(task.id)
                 if sizeCounts[task.fileSize] == 1 {
                     checkedDuplicateTaskIDs.insert(task.id)
                 }
