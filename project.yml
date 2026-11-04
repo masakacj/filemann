@@ -58,6 +58,12 @@ targets:
           - CFBundleURLName: "FileMann Inbox"
             CFBundleURLSchemes:
               - filemann
+        UIBackgroundModes:
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.masakacj.filemann.archive.refresh
+          - com.masakacj.filemann.archive.processing
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
