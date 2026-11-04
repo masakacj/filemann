@@ -12,7 +12,27 @@ enum ArchiveBackgroundTaskScheduler {
     static let processingIdentifier =
         "com.masakacj.filemann.archive.processing"
 
+    enum WakeReason: String {
+        case session = "URLSession"
+        case refresh = "后台 App 刷新"
+        case processing = "后台处理"
+    }
+
+    private static let lastWakeAtKey = "filemann.background.last.wake.v1"
+    private static let lastWakeReasonKey = "filemann.background.last.reason.v1"
     private static weak var liveModel: ArchiveViewModel?
+
+    static var lastSystemWakeDescription: String {
+        guard let at = UserDefaults.standard.object(
+            forKey: lastWakeAtKey
+        ) as? Date else {
+            return "还没有系统后台唤醒记录；需在真机锁屏后检查"
+        }
+        let source = UserDefaults.standard.string(
+            forKey: lastWakeReasonKey
+        ) ?? "系统"
+        return "最近后台唤醒：\(at.formatted(date: .abbreviated, time: .shortened))（\(source)）"
+    }
 
     static func attach(_ model: ArchiveViewModel) {
         liveModel = model
@@ -80,15 +100,17 @@ enum ArchiveBackgroundTaskScheduler {
     /// Do not claim success or tell UIKit we're done until a refill attempt
     /// has finished handing more file tasks to the background daemon.
     @discardableResult
-    static func runOnce() async -> Bool {
+    static func runOnce(
+        reason: WakeReason
+    ) async -> Bool {
+        UserDefaults.standard.set(Date(), forKey: lastWakeAtKey)
+        UserDefaults.standard.set(
+            reason.rawValue, forKey: lastWakeReasonKey
+        )
         guard TaskStore.shouldResumeArchive() else { return true }
         let model = liveModel ?? ArchiveViewModel()
         let result = await model.refillAfterSystemWake()
-        if TaskStore.shouldResumeArchive() {
-            scheduleIfNeeded()
-        } else {
-            scheduleIfNeeded() // Cancels any obsolete scheduled requests.
-        }
+        scheduleIfNeeded() // Re-arm if needed, or cancel after batch finish.
         return result
     }
 }
