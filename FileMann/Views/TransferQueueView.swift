@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Persisted archive queue, independent from which media tab is open.
 struct TransferQueueView: View {
@@ -34,13 +35,16 @@ struct TransferQueueView: View {
                                 .foregroundStyle(.secondary)
                         }
                         ProgressView(value: model.overallProgress)
-                        if model.isRunning {
-                            let stagedCount = model.tasks.filter {
+                        if TaskStore.shouldResumeArchive() || model.isRunning {
+                            let submitted = model.tasks.filter {
                                 $0.state == .uploading
                             }.count
+                            let waiting = model.tasks.filter {
+                                $0.state == .queued || $0.state == .paused
+                            }.count
                             Label(
-                                "已提交系统后台：\(stagedCount) 项；" +
-                                "锁屏或切换 App 可以继续，手动上划强制关闭会中断",
+                                "已交系统后台 \(submitted) 项 · 待调度 \(waiting) 项；" +
+                                "iOS 可以在锁屏后继续已提交的文件，剩余文件由后台任务补队列",
                                 systemImage: "iphone.gen3.radiowaves.left.and.right"
                             )
                             .font(.caption2)
@@ -66,6 +70,38 @@ struct TransferQueueView: View {
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                         }
+
+                        Label(
+                            ArchiveBackgroundTaskScheduler.backgroundRefreshExplanation,
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        Label(
+                            ArchiveBackgroundTaskScheduler.lastSystemWakeDescription,
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        Text(
+                            "没有“永久后台运行”权限开关。" +
+                            "可在 iPhone 设置 → 通用 → 后台 App 刷新中检查是否允许 FileMann；" +
+                            "强制上划关闭应用后，系统不会保证继续上传。"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        Button {
+                            guard let url = URL(
+                                string: UIApplication.openSettingsURLString
+                            ) else { return }
+                            UIApplication.shared.open(url)
+                        } label: {
+                            Label(
+                                "打开 FileMann 系统设置",
+                                systemImage: "gearshape"
+                            )
+                        }
+                        .font(.caption)
 
                         if model.usesLocalLANTransfer {
                             Label(

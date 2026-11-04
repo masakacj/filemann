@@ -6,8 +6,10 @@ import Foundation
 enum WebDAVUploadSchedulingPolicy {
     static let largeFileThresholdBytes: Int64 = 64 * 1024 * 1024
     static let backgroundPrefetchMaxFileBytes: Int64 = 16 * 1024 * 1024
-    static let maximumPreparedSmallUploads = 16
-    static let maximumPreparedBytes: Int64 = 160 * 1024 * 1024
+    // 223+ item batches previously stalled after only 16 queued files.
+    // Hand more *small* files to iOS at once without unlimited staging.
+    static let maximumPreparedSmallUploads = 64
+    static let maximumPreparedBytes: Int64 = 384 * 1024 * 1024
     static let maximumLANMediumUploads = 2
     static let maximumWANHTTPConnections = 2
     static let maximumLANHTTPConnections = 4
@@ -32,6 +34,15 @@ enum WebDAVUploadSchedulingPolicy {
             return false
         }
         return SMBSettings.isPrivateLANHost(host)
+    }
+
+    /// First hand a substantial number of small, durable upload tasks to
+    /// the system. Encountering one 4 GB movie at the top of a 223-item
+    /// queue must not prevent all later HEICs from being pre-submitted.
+    static func priority(for fileSize: Int64) -> Int {
+        if fileSize <= backgroundPrefetchMaxFileBytes { return 0 }
+        if fileSize <= largeFileThresholdBytes { return 1 }
+        return 2
     }
 
     static func canSchedule(

@@ -44,11 +44,16 @@ final class ArchiveViewModel: ObservableObject {
     private var webDAVBatchSettings: SMBSettings?
     private var webDAVBatchPassword: String?
     private var checkedDuplicateTaskIDs = Set<UUID>()
+    // Which queued tasks were actually duplicate-checked during this
+    // scheduling pass. A BG wake scans only a bounded next window, so
+    // unchecked media must never bypass full NAS duplicate detection.
+    private var scannedDuplicateTaskIDsThisPass = Set<UUID>()
     // Only hash small/medium same-sized files that could overlap on LAN.
     // A byte-identical local peer must wait for NAS verification and the
     // duplicate-review flow; size alone is not proof of identical content.
     private var sourceFingerprintCache: [UUID: Data] = [:]
     private var webDAVScheduling = false
+    private var webDAVSchedulingTask: Task<Void, Never>?
     private var webDAVRefillRequested = false
     private var isRecoveringOnForeground = false
 
@@ -62,6 +67,7 @@ final class ArchiveViewModel: ObservableObject {
         webDAVBatchSettings = nil
         webDAVBatchPassword = nil
         checkedDuplicateTaskIDs.removeAll()
+        scannedDuplicateTaskIDsThisPass.removeAll()
         sourceFingerprintCache.removeAll()
         lastProgressUIUpdate.removeAll()
         webDAVRefillRequested = false
@@ -121,6 +127,7 @@ final class ArchiveViewModel: ObservableObject {
         }
 
         installWebDAVObservers()
+        ArchiveBackgroundTaskScheduler.attach(self)
 
         Task { [weak self] in
             await self?.restoreWebDAVBackgroundTasks()
@@ -556,6 +563,7 @@ final class ArchiveViewModel: ObservableObject {
     func start() {
         guard !isRunning else { return }
         TaskStore.setShouldResumeArchive(true)
+        ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
         // No SMB fallback: all new and restored tasks use the system-backed
         // WebDAV upload manager for local or remote transfer.
         settings.transport = .webDAV
@@ -568,6 +576,7 @@ final class ArchiveViewModel: ObservableObject {
     func pause() {
         if settings.transport == .webDAV {
             TaskStore.setShouldResumeArchive(false)
+            ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
             queueGeneration += 1
             resetWebDAVBatchCache()
             WebDAVBackgroundUploadManager.shared.suspendAll()
@@ -853,6 +862,7 @@ final class ArchiveViewModel: ObservableObject {
     /// are purged, so importing will not re-add cleared entries on launch.
     func clearAllTasks() {
         TaskStore.setShouldResumeArchive(false)
+        ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
         queueGeneration += 1
         resetWebDAVBatchCache()
         worker?.cancel()
@@ -957,9 +967,10 @@ final class ArchiveViewModel: ObservableObject {
             bytesPerSecond = 0
         }
 
-        Task {
+        webDAVSchedulingTask = Task {
             defer {
                 webDAVScheduling = false
+                webDAVSchedulingTask = nil
                 if webDAVRefillRequested {
                     webDAVRefillRequested = false
                     if generation == queueGeneration && isRunning &&
@@ -1032,9 +1043,31 @@ final class ArchiveViewModel: ObservableObject {
                 var inFlightSizes = tasks.filter {
                     existingTaskIDs.contains($0.id)
                 }.map(\.fileSize)
-                for index in tasks.indices {
+                let schedulingOrder = tasks.indices
+                    .filter { tasks[$0].state == .queued }
+                    .sorted { first, second in
+                        let a = WebDAVUploadSchedulingPolicy.priority(
+                            for: tasks[first].fileSize
+                        )
+                        let b = WebDAVUploadSchedulingPolicy.priority(
+                            for: tasks[second].fileSize
+                        )
+                        return a == b ? first < second : a < b
+                    }
+                for index in schedulingOrder {
                     guard generation == queueGeneration else { return }
                     guard tasks[index].state == .queued else {
+                        continue
+                    }
+                    // During an opportunistic iOS wake, scan only the
+                    // next manageable segment instead of every remaining
+                    // item. Never submit a task not checked in this pass,
+                    // except a batch-unique size already checked earlier.
+                    guard scannedDuplicateTaskIDsThisPass.contains(
+                        tasks[index].id
+                    ) || checkedDuplicateTaskIDs.contains(
+                        tasks[index].id
+                    ) else {
                         continue
                     }
                     if tasks[index].fileSize <= 0 {
@@ -1255,19 +1288,38 @@ final class ArchiveViewModel: ObservableObject {
         // them as pending forced perpetual rechecks on later callbacks.
         let sizeCounts = Dictionary(
             tasks.filter {
-                [.queued, .uploading, .paused, .failed, .missingSource]
-                    .contains($0.state)
+                [.queued, .uploading].contains($0.state)
             }.map { ($0.fileSize, 1) },
             uniquingKeysWith: +
         )
-        let candidates = tasks.filter {
-            [.queued, .paused, .failed, .missingSource]
-                .contains($0.state) &&
-            !activeTaskIDs.contains($0.id) &&
-            !knownTaskIDs.contains($0.id) &&
-            !checkedDuplicateTaskIDs.contains($0.id) &&
-            !$0.needsShareFilenameDecision
+        scannedDuplicateTaskIDsThisPass.removeAll()
+        // The first foreground start can review all duplicates together.
+        // A short system wake should examine only the next 64 candidates;
+        // the rest stay queued until the next refill, never unchecked PUT.
+        let limit = UIApplication.shared.applicationState == .active
+            ? Int.max
+            : WebDAVUploadSchedulingPolicy.maximumPreparedSmallUploads
+        let candidateIndices = tasks.indices.filter { index in
+            let task = tasks[index]
+            // Failed tasks wait for explicit retry; they cannot starve
+            // the healthy queued tail during an opportunistic wake.
+            return task.state == .queued &&
+                !activeTaskIDs.contains(task.id) &&
+                !knownTaskIDs.contains(task.id) &&
+                !checkedDuplicateTaskIDs.contains(task.id) &&
+                !task.needsShareFilenameDecision
+        }.sorted { first, second in
+            let a = WebDAVUploadSchedulingPolicy.priority(
+                for: tasks[first].fileSize
+            )
+            let b = WebDAVUploadSchedulingPolicy.priority(
+                for: tasks[second].fileSize
+            )
+            return a == b ? first < second : a < b
         }
+        let candidates = Array(candidateIndices.prefix(limit).map {
+            tasks[$0]
+        })
 
         guard !candidates.isEmpty else { return false }
 
@@ -1297,10 +1349,10 @@ final class ArchiveViewModel: ObservableObject {
                     found = true
                     persistDuplicates()
                 }
-                // Unique-sized batch items cannot be byte-identical to
-                // another selected file. Reuse their negative scan; when
-                // sizes repeat, recheck after the first upload publishes,
-                // so intra-batch duplicates still reach review.
+                // A successful negative check unlocks only this pass.
+                // Same-sized files are checked again after a newly
+                // published peer appears, avoiding intra-batch duplicates.
+                scannedDuplicateTaskIDsThisPass.insert(task.id)
                 if sizeCounts[task.fileSize] == 1 {
                     checkedDuplicateTaskIDs.insert(task.id)
                 }
@@ -1504,10 +1556,24 @@ final class ArchiveViewModel: ObservableObject {
                     self.persistTasks()
                     WebDAVBackgroundReceiptStore.remove(taskID: taskID)
 
-                    if !self.tasks.contains(where: { $0.state == .uploading }) {
+                    let stillUploading = self.tasks.contains {
+                        $0.state == .uploading
+                    }
+                    let stillQueued = self.tasks.contains {
+                        $0.state == .queued &&
+                        !$0.needsShareFilenameDecision
+                    }
+                    if TaskStore.shouldResumeArchive() && stillQueued {
+                        // A failed PUT must not strand *other* queued media.
+                        // The failed file itself remains .failed until
+                        // the user explicitly retries it.
+                        self.startWebDAV(retryFailed: false)
+                    } else if !stillUploading {
                         self.isRunning = false
                     }
-                    self.statusMessage = "有后台上传失败，点“继续归档”重试"
+                    self.statusMessage = stillQueued
+                        ? "部分后台上传失败；其他文件继续排队，失败项需要手动重试"
+                        : "有后台上传失败，点“继续归档”重试"
                 }
             }
         )
@@ -1653,49 +1719,68 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
-    /// Called only while the app is visible to the user. iOS controls when
-    /// it runs background tasks, so simply reopening FileMann may safely
-    /// restore a user-started queue, but an explicit Pause stays respected.
-    func resumeOnForegroundIfNeeded() {
-        guard !isRecoveringOnForeground else { return }
+    /// System URLSession callbacks and BGTaskScheduler invocations run this
+    /// even if no SwiftUI scene became visible. We must refill when already
+    /// uploading: the previous !isRunning guard stranded the queued tail of
+    /// a 223-file archive behind its first submitted batch.
+    func refillAfterSystemWake() async -> Bool {
+        guard !isRecoveringOnForeground else {
+            if let running = webDAVSchedulingTask {
+                await running.value
+            }
+            return true
+        }
         isRecoveringOnForeground = true
+        defer { isRecoveringOnForeground = false }
 
+        await restoreWebDAVBackgroundTasks()
+        guard !Task.isCancelled,
+              TaskStore.shouldResumeArchive(),
+              unresolvedDuplicateCount == 0 else {
+            return !Task.isCancelled
+        }
+
+        await recoverInterruptedPublishedFiles()
+        guard !Task.isCancelled,
+              TaskStore.shouldResumeArchive() else {
+            return false
+        }
+
+        let hasPending = tasks.contains { task in
+            (task.state == .queued || task.state == .paused) &&
+            !task.needsShareFilenameDecision
+        }
+        if !hasPending {
+            if !tasks.contains(where: {
+                $0.state == .uploading || $0.state == .paused ||
+                $0.state == .queued
+            }) {
+                await finishWebDAVBatchIfPossible()
+            }
+            return true
+        }
+
+        // Only the still-queued part needs new work; suspended URLSession
+        // tasks are restored separately and are never submitted twice.
+        for index in tasks.indices
+            where tasks[index].state == .paused {
+            tasks[index].state = .queued
+            tasks[index].errorMessage =
+                "已恢复排队；等待系统提交下一批后台上传"
+        }
+        persistTasks()
+        startWebDAV(retryFailed: false)
+        // A BG task must remain active until the uploads have actually
+        // been handed to the system, not just until the Task was created.
+        if let scheduling = webDAVSchedulingTask {
+            await scheduling.value
+        }
+        return !Task.isCancelled
+    }
+
+    func resumeOnForegroundIfNeeded() {
         Task { @MainActor in
-            defer { isRecoveringOnForeground = false }
-            await restoreWebDAVBackgroundTasks()
-
-            guard TaskStore.shouldResumeArchive(), !isRunning,
-                  unresolvedDuplicateCount == 0 else {
-                return
-            }
-
-            await recoverInterruptedPublishedFiles()
-
-            let hasPending = tasks.contains { task in
-                (task.state == .queued || task.state == .paused) &&
-                !task.needsShareFilenameDecision
-            }
-            if !hasPending {
-                // iOS may have completed the final background uploads
-                // while FileMann was not visible. Close the batch and
-                // clear the resume intent once all receipts are restored.
-                if !tasks.contains(where: {
-                    $0.state == .uploading ||
-                    $0.state == .paused ||
-                    $0.state == .queued
-                }) {
-                    await finishWebDAVBatchIfPossible()
-                }
-                return
-            }
-
-            for index in tasks.indices where tasks[index].state == .paused {
-                tasks[index].state = .queued
-                tasks[index].errorMessage =
-                    "从上次系统后台中断后继续排队"
-            }
-            persistTasks()
-            startWebDAV(retryFailed: false)
+            _ = await refillAfterSystemWake()
         }
     }
 
@@ -1741,6 +1826,7 @@ final class ArchiveViewModel: ObservableObject {
         isRunning = false
         resetWebDAVBatchCache()
         TaskStore.setShouldResumeArchive(false)
+        ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
 
         if tasks.contains(where: {
             $0.state == .failed || $0.state == .missingSource

@@ -199,6 +199,12 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = 'com.masakacj.filemann'
           test "$(/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$APP_PATH/Info.plist")" = 'true'
           test "$(/usr/libexec/PlistBuddy -c 'Print :UIUserInterfaceStyle' "$APP_PATH/Info.plist")" = 'Dark'
+          for mode in fetch processing; do
+            /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP_PATH/Info.plist" | grep -qx "    $mode"
+          done
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP_PATH/Info.plist" | grep -q 'com.masakacj.filemann.archive.refresh'
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$APP_PATH/Info.plist" | grep -q 'com.masakacj.filemann.archive.processing'
+          ! /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$APP_PATH/Info.plist" | grep -q 'audio'
           /usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$APP_PATH/Info.plist" | grep -qx 'filemann'
           test -f "$APP_PATH/Frameworks/AMSMB2.framework/AMSMB2"
           otool -L "$EXECUTABLE" | grep -q '@rpath/AMSMB2.framework/AMSMB2'
