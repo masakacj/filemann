@@ -4,6 +4,15 @@ import UIKit
 final class FileMannAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions:
+            [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+        ArchiveBackgroundTaskScheduler.registerHandlers()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
@@ -61,20 +70,6 @@ struct FileMannApp: App {
                         .prepareAtLaunch()
                     viewModel.syncConfigCenter(silent: true)
                 }
-        }
-        .backgroundTask(
-            .appRefresh(ArchiveBackgroundTaskScheduler.refreshIdentifier)
-        ) {
-            _ = await ArchiveBackgroundTaskScheduler.runOnce(
-                reason: .refresh
-            )
-        }
-        .backgroundTask(
-            .processing(ArchiveBackgroundTaskScheduler.processingIdentifier)
-        ) {
-            _ = await ArchiveBackgroundTaskScheduler.runOnce(
-                reason: .processing
-            )
         }
     }
 }
