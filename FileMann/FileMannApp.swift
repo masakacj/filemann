@@ -9,7 +9,14 @@ final class FileMannAppDelegate: NSObject, UIApplicationDelegate {
     ) {
         WebDAVBackgroundUploadManager.shared.setBackgroundCompletionHandler(
             identifier: identifier,
-            completionHandler: completionHandler
+            completionHandler: {
+                // A background URLSession callback might be the only
+                // reason iOS has relaunched us without a visible scene.
+                Task { @MainActor in
+                    _ = await ArchiveBackgroundTaskScheduler.runOnce()
+                    completionHandler()
+                }
+            }
         )
     }
 }
@@ -43,6 +50,8 @@ struct FileMannApp: App {
                     if phase == .active {
                         viewModel.importShareInbox()
                         viewModel.resumeOnForegroundIfNeeded()
+                    } else if phase == .background {
+                        ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
                     }
                 }
                 .task {
@@ -50,6 +59,16 @@ struct FileMannApp: App {
                         .prepareAtLaunch()
                     viewModel.syncConfigCenter(silent: true)
                 }
+        }
+        .backgroundTask(
+            .appRefresh(ArchiveBackgroundTaskScheduler.refreshIdentifier)
+        ) {
+            _ = await ArchiveBackgroundTaskScheduler.runOnce()
+        }
+        .backgroundTask(
+            .processing(ArchiveBackgroundTaskScheduler.processingIdentifier)
+        ) {
+            _ = await ArchiveBackgroundTaskScheduler.runOnce()
         }
     }
 }
