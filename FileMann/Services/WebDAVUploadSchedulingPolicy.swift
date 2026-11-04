@@ -36,6 +36,15 @@ enum WebDAVUploadSchedulingPolicy {
         return SMBSettings.isPrivateLANHost(host)
     }
 
+    /// First hand a substantial number of small, durable upload tasks to
+    /// the system. Encountering one 4 GB movie at the top of a 223-item
+    /// queue must not prevent all later HEICs from being pre-submitted.
+    static func priority(for fileSize: Int64) -> Int {
+        if fileSize <= backgroundPrefetchMaxFileBytes { return 0 }
+        if fileSize <= largeFileThresholdBytes { return 1 }
+        return 2
+    }
+
     static func canSchedule(
         fileSize: Int64,
         inFlightSizes: [Int64],
