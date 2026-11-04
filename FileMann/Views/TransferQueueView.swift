@@ -77,6 +77,12 @@ struct TransferQueueView: View {
                         )
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        Label(
+                            ArchiveBackgroundTaskScheduler.lastSystemWakeDescription,
+                            systemImage: "clock.arrow.circlepath"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                         Text(
                             "没有“永久后台运行”权限开关。" +
                             "可在 iPhone 设置 → 通用 → 后台 App 刷新中检查是否允许 FileMann；" +
