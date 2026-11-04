@@ -7,7 +7,13 @@ struct FileMannStorageSnapshot: Sendable, Equatable {
     var shareStagingBytes: Int64 = 0
     var cacheBytes: Int64 = 0
     var metadataBytes: Int64 = 0
+    var editMetadataBytes: Int64 = 0
+    var importMetadataBytes: Int64 = 0
     var temporaryBytes: Int64 = 0
+    var temporaryReclaimableBytes: Int64 = 0
+    var temporaryFileCount = 0
+    var temporaryReclaimableCount = 0
+    var largestTemporaryFiles: [FileMannTemporaryFile] = []
 
     // Whole-container diagnostics. These include data not created by the
     // current FileMann cache/media helpers, such as system URLSession files.
@@ -63,9 +69,7 @@ actor FileMannStorageManager {
         let imports = directorySize(
             try? FileMannShared.importMetadataDirectory()
         )
-        let temporary = directorySize(
-            fileManager.temporaryDirectory
-        )
+        let temporary = FileMannTemporaryStorage.inspect()
         let cache = await FileMannCacheManager.shared
             .currentSizeBytes()
 
@@ -98,7 +102,13 @@ actor FileMannStorageManager {
             shareStagingBytes: directorySize(sharedIncoming),
             cacheBytes: cache,
             metadataBytes: edits + imports,
-            temporaryBytes: temporary,
+            editMetadataBytes: edits,
+            importMetadataBytes: imports,
+            temporaryBytes: temporary.totalBytes,
+            temporaryReclaimableBytes: temporary.reclaimableBytes,
+            temporaryFileCount: temporary.fileCount,
+            temporaryReclaimableCount: temporary.reclaimableCount,
+            largestTemporaryFiles: temporary.largestFiles,
             sandboxBytes: directorySize(home),
             documentsBytes: directorySize(documents),
             libraryBytes: directorySize(library),
@@ -112,6 +122,42 @@ actor FileMannStorageManager {
             legacyAppGroupMediaBytes:
                 directorySize(legacyMedia)
         )
+    }
+
+    enum TemporaryCleanupError: LocalizedError {
+        case queueNotEmpty
+        case pendingRecovery
+        case activeBackgroundTransfer
+
+        var errorDescription: String? {
+            switch self {
+            case .queueNotEmpty:
+                return "归档任务列表仍有记录。清空任务列表后，才能清理上传临时文件。"
+            case .pendingRecovery:
+                return "存在后台续传意图或尚未消费的后台完成收据，暂不允许清理。"
+            case .activeBackgroundTransfer:
+                return "iOS 仍有后台 URLSession 上传或归档确认任务，暂不允许清理。"
+            }
+        }
+    }
+
+    /// The UI queue being empty is necessary but not sufficient:
+    /// URLSession tasks may outlive the SwiftUI view model. The check is
+    /// performed here, at deletion time, across all three sessions.
+    func clearFinishedArchiveTemporaryFiles()
+        async throws -> FileMannTemporaryCleanupResult {
+        guard TaskStore.loadTasks().isEmpty else {
+            throw TemporaryCleanupError.queueNotEmpty
+        }
+        guard !TaskStore.shouldResumeArchive(),
+              WebDAVBackgroundReceiptStore.load().isEmpty else {
+            throw TemporaryCleanupError.pendingRecovery
+        }
+        guard !(await WebDAVBackgroundUploadManager.shared
+            .hasAnySubmittedTasks()) else {
+            throw TemporaryCleanupError.activeBackgroundTransfer
+        }
+        return FileMannTemporaryStorage.removeStaleFiles()
     }
 
     @discardableResult
