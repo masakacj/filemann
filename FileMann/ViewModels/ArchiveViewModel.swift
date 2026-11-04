@@ -1277,8 +1277,7 @@ final class ArchiveViewModel: ObservableObject {
         // them as pending forced perpetual rechecks on later callbacks.
         let sizeCounts = Dictionary(
             tasks.filter {
-                [.queued, .uploading, .paused, .failed, .missingSource]
-                    .contains($0.state)
+                [.queued, .uploading].contains($0.state)
             }.map { ($0.fileSize, 1) },
             uniquingKeysWith: +
         )
@@ -1290,8 +1289,10 @@ final class ArchiveViewModel: ObservableObject {
             ? Int.max
             : WebDAVUploadSchedulingPolicy.maximumPreparedSmallUploads
         let candidates = Array(tasks.filter {
-            [.queued, .paused, .failed, .missingSource]
-                .contains($0.state) &&
+            // Failed items must wait for an explicit retry. Otherwise the
+            // first 64 failures can starve every healthy queued file on
+            // each short iOS background wake.
+            $0.state == .queued &&
             !activeTaskIDs.contains($0.id) &&
             !knownTaskIDs.contains($0.id) &&
             !checkedDuplicateTaskIDs.contains($0.id) &&
