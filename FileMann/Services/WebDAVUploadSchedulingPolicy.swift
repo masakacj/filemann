@@ -6,8 +6,10 @@ import Foundation
 enum WebDAVUploadSchedulingPolicy {
     static let largeFileThresholdBytes: Int64 = 64 * 1024 * 1024
     static let backgroundPrefetchMaxFileBytes: Int64 = 16 * 1024 * 1024
-    static let maximumPreparedSmallUploads = 16
-    static let maximumPreparedBytes: Int64 = 160 * 1024 * 1024
+    // 223+ item batches previously stalled after only 16 queued files.
+    // Hand more *small* files to iOS at once without unlimited staging.
+    static let maximumPreparedSmallUploads = 64
+    static let maximumPreparedBytes: Int64 = 384 * 1024 * 1024
     static let maximumLANMediumUploads = 2
     static let maximumWANHTTPConnections = 2
     static let maximumLANHTTPConnections = 4
