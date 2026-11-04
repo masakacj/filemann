@@ -99,7 +99,7 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
             WebDAVUploadSchedulingPolicy.priority(for: $0) <
                 WebDAVUploadSchedulingPolicy.priority(for: $1)
         }
-        XCTAssertEqual(ordered.prefix(2), [4 * mib, 3 * mib])
+        XCTAssertEqual(Array(ordered.prefix(2)), [4 * mib, 3 * mib])
     }
 
     func testZeroLengthMediaNeverOccupiesUploadSlot() {
