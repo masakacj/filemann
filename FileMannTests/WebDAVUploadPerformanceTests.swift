@@ -10,18 +10,21 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
                 fileSize: size, inFlightSizes: []
             )
         )
-        let staged = (0..<15).map { size + Int64($0) }
+        let staged = (0..<63).map { size + Int64($0) }
         XCTAssertTrue(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: size + 16,
+                fileSize: size + 64,
                 inFlightSizes: staged
             )
         )
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: size + 17,
-                inFlightSizes: staged + [size + 16]
+                fileSize: size + 65,
+                inFlightSizes: staged + [size + 64]
             )
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.maximumPreparedSmallUploads, 64
         )
         XCTAssertEqual(
             WebDAVUploadSchedulingPolicy.maximumHTTPConnections, 2
@@ -39,12 +42,16 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
 
     func testBackgroundPrestageBytesRemainBounded() {
         let largeHEIC: Int64 = 15 * 1024 * 1024
-        let staged = (0..<10).map { largeHEIC + Int64($0) }
+        let staged = (0..<25).map { largeHEIC + Int64($0) }
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
-                fileSize: largeHEIC + 15,
+                fileSize: largeHEIC + 26,
                 inFlightSizes: staged
             )
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.maximumPreparedBytes,
+            384 * 1024 * 1024
         )
     }
 
@@ -82,6 +89,25 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
                 fileSize: 0, inFlightSizes: []
             )
         )
+    }
+
+    func testBackgroundModesAndTaskIdentifiersAreInAppBundle() {
+        let bundle = Bundle.main
+        let modes = bundle.object(forInfoDictionaryKey: "UIBackgroundModes")
+            as? [String] ?? []
+        let identifiers = bundle.object(
+            forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers"
+        ) as? [String] ?? []
+        XCTAssertTrue(modes.contains("fetch"))
+        XCTAssertTrue(modes.contains("processing"))
+        XCTAssertTrue(identifiers.contains(
+            ArchiveBackgroundTaskScheduler.refreshIdentifier
+        ))
+        XCTAssertTrue(identifiers.contains(
+            ArchiveBackgroundTaskScheduler.processingIdentifier
+        ))
+        XCTAssertFalse(modes.contains("audio"),
+                       "Silent audio cannot be used as an upload keep-alive")
     }
 
     func testProbedPrivateLANUsesFourConnectionsWhileWANUsesTwo() {
