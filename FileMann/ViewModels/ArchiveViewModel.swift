@@ -857,6 +857,7 @@ final class ArchiveViewModel: ObservableObject {
     /// are purged, so importing will not re-add cleared entries on launch.
     func clearAllTasks() {
         TaskStore.setShouldResumeArchive(false)
+        ArchiveBackgroundTaskScheduler.scheduleIfNeeded()
         queueGeneration += 1
         resetWebDAVBatchCache()
         worker?.cancel()
@@ -1509,10 +1510,24 @@ final class ArchiveViewModel: ObservableObject {
                     self.persistTasks()
                     WebDAVBackgroundReceiptStore.remove(taskID: taskID)
 
-                    if !self.tasks.contains(where: { $0.state == .uploading }) {
+                    let stillUploading = self.tasks.contains {
+                        $0.state == .uploading
+                    }
+                    let stillQueued = self.tasks.contains {
+                        $0.state == .queued &&
+                        !$0.needsShareFilenameDecision
+                    }
+                    if TaskStore.shouldResumeArchive() && stillQueued {
+                        // A failed PUT must not strand *other* queued media.
+                        // The failed file itself remains .failed until
+                        // the user explicitly retries it.
+                        self.startWebDAV(retryFailed: false)
+                    } else if !stillUploading {
                         self.isRunning = false
                     }
-                    self.statusMessage = "有后台上传失败，点“继续归档”重试"
+                    self.statusMessage = stillQueued
+                        ? "部分后台上传失败；其他文件继续排队，失败项需要手动重试"
+                        : "有后台上传失败，点“继续归档”重试"
                 }
             }
         )
