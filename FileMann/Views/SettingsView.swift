@@ -21,6 +21,8 @@ struct SettingsView: View {
     @State private var isClearingSystemCache = false
     @State private var isClearingLegacyGroup = false
     @State private var showClearSystemCacheConfirmation = false
+    @State private var showClearTemporaryConfirmation = false
+    @State private var isClearingTemporary = false
     @State private var showClearLegacyGroupConfirmation = false
 
     var body: some View {
@@ -168,6 +170,26 @@ struct SettingsView: View {
         } message: {
             Text(
                 "会清理 FileMann 沙盒 Library/Caches 中的可重建数据，包括可能由后台 URLSession 遗留的数据。存在未完成归档任务时不会允许执行。"
+            )
+        }
+        .confirmationDialog(
+            "清理 FileMann 遗留的上传临时文件？",
+            isPresented: $showClearTemporaryConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(
+                "清理约 \(byteCountString(storageSnapshot.temporaryReclaimableBytes))",
+                role: .destructive
+            ) {
+                clearArchiveTemporaryFiles()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(
+                "仅清理 FileMann 自己 tmp 目录中超过 10 分钟的旧文件。" +
+                "清理时会再次核实任务列表为空、没有后台续传意图或收据、" +
+                "所有后台 URLSession 都无任务。不会删除 NAS、相册、Documents、" +
+                "App Group 或 FileMann 本地媒体。"
             )
         }
         .confirmationDialog(
@@ -408,12 +430,58 @@ struct SettingsView: View {
             }
 
             LabeledContent("元数据 / 临时文件") {
+                Text(byteCountString(storageSnapshot.otherBytes))
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("编辑元数据") {
+                Text(byteCountString(storageSnapshot.editMetadataBytes))
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("导入元数据") {
+                Text(byteCountString(storageSnapshot.importMetadataBytes))
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("App tmp 临时文件") {
+                Text(byteCountString(storageSnapshot.temporaryBytes))
+                    .foregroundStyle(
+                        storageSnapshot.temporaryBytes > 100 * 1024 * 1024
+                            ? .orange : .secondary
+                    )
+            }
+            LabeledContent("其中旧临时文件可清理") {
                 Text(
                     byteCountString(
-                        storageSnapshot.otherBytes
-                    )
+                        storageSnapshot.temporaryReclaimableBytes
+                    ) + " · \(storageSnapshot.temporaryReclaimableCount) 个"
                 )
                 .foregroundStyle(.secondary)
+            }
+
+            if !storageSnapshot.largestTemporaryFiles.isEmpty {
+                DisclosureGroup("查看最大的临时文件（最多 8 个）") {
+                    ForEach(storageSnapshot.largestTemporaryFiles) { item in
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text(byteCountString(item.bytes))
+                                    .font(.caption.monospacedDigit())
+                                Spacer()
+                                Text(
+                                    item.modifiedAt,
+                                    style: .relative
+                                )
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            }
+                            Text(item.path)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
             }
 
             LabeledContent("可管理合计") {
@@ -534,6 +602,28 @@ struct SettingsView: View {
                 )
             }
             .disabled(isClearingCache)
+
+            if storageSnapshot.temporaryReclaimableBytes >
+                1024 * 1024 {
+                Button(role: .destructive) {
+                    showClearTemporaryConfirmation = true
+                } label: {
+                    Label(
+                        "清理已完成归档遗留的临时文件",
+                        systemImage: "externaldrive.badge.minus"
+                    )
+                }
+                .disabled(
+                    isClearingTemporary ||
+                    !viewModel.tasks.isEmpty ||
+                    hasPendingArchiveWork
+                )
+                if !viewModel.tasks.isEmpty {
+                    Text("需要先清空传输任务记录，且 iOS 后台上传任务均已结束。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if storageSnapshot.systemCacheBytes >
                 1024 * 1024 {
@@ -749,6 +839,32 @@ struct SettingsView: View {
                 "已清理系统 / 后台缓存 " +
                 byteCountString(freed)
             isClearingSystemCache = false
+            await refreshStorage()
+        }
+    }
+
+    @MainActor
+    private func clearArchiveTemporaryFiles() {
+        guard !isClearingTemporary, viewModel.tasks.isEmpty else {
+            return
+        }
+        isClearingTemporary = true
+        storageStatusMessage = nil
+
+        Task {
+            do {
+                let result = try await FileMannStorageManager.shared
+                    .clearFinishedArchiveTemporaryFiles()
+                storageStatusMessage =
+                    "已清理 \(result.removedCount) 个归档临时文件，共 " +
+                    byteCountString(result.removedBytes) +
+                    (result.failedCount > 0
+                        ? "；另有 \(result.failedCount) 个文件删除失败"
+                        : "；未触碰 NAS 或相册原件")
+            } catch {
+                storageStatusMessage = "清理未执行：" + error.localizedDescription
+            }
+            isClearingTemporary = false
             await refreshStorage()
         }
     }

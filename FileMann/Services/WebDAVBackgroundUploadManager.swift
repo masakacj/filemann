@@ -151,6 +151,22 @@ final class WebDAVBackgroundUploadManager: NSObject {
         return active
     }
 
+    /// Include unknown/legacy URLSession tasks too, not just those with a
+    /// decodable taskDescription. Storage cleanup must fail closed if iOS
+    /// still owns any background upload, even after the UI queue is empty.
+    func hasAnySubmittedTasks() async -> Bool {
+        if !pendingFinalizingIDs().isEmpty { return true }
+        for session in allSessions {
+            let count: Int = await withCheckedContinuation { continuation in
+                session.getAllTasks { tasks in
+                    continuation.resume(returning: tasks.count)
+                }
+            }
+            if count > 0 { return true }
+        }
+        return !pendingFinalizingIDs().isEmpty
+    }
+
     private func pendingFinalizingIDs() -> Set<UUID> {
         finalizingLock.lock()
         defer { finalizingLock.unlock() }
