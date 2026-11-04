@@ -1043,7 +1043,18 @@ final class ArchiveViewModel: ObservableObject {
                 var inFlightSizes = tasks.filter {
                     existingTaskIDs.contains($0.id)
                 }.map(\.fileSize)
-                for index in tasks.indices {
+                let schedulingOrder = tasks.indices
+                    .filter { tasks[$0].state == .queued }
+                    .sorted { first, second in
+                        let a = WebDAVUploadSchedulingPolicy.priority(
+                            for: tasks[first].fileSize
+                        )
+                        let b = WebDAVUploadSchedulingPolicy.priority(
+                            for: tasks[second].fileSize
+                        )
+                        return a == b ? first < second : a < b
+                    }
+                for index in schedulingOrder {
                     guard generation == queueGeneration else { return }
                     guard tasks[index].state == .queued else {
                         continue
@@ -1288,16 +1299,27 @@ final class ArchiveViewModel: ObservableObject {
         let limit = UIApplication.shared.applicationState == .active
             ? Int.max
             : WebDAVUploadSchedulingPolicy.maximumPreparedSmallUploads
-        let candidates = Array(tasks.filter {
-            // Failed items must wait for an explicit retry. Otherwise the
-            // first 64 failures can starve every healthy queued file on
-            // each short iOS background wake.
-            $0.state == .queued &&
-            !activeTaskIDs.contains($0.id) &&
-            !knownTaskIDs.contains($0.id) &&
-            !checkedDuplicateTaskIDs.contains($0.id) &&
-            !$0.needsShareFilenameDecision
-        }.prefix(limit))
+        let candidateIndices = tasks.indices.filter { index in
+            let task = tasks[index]
+            // Failed tasks wait for explicit retry; they cannot starve
+            // the healthy queued tail during an opportunistic wake.
+            return task.state == .queued &&
+                !activeTaskIDs.contains(task.id) &&
+                !knownTaskIDs.contains(task.id) &&
+                !checkedDuplicateTaskIDs.contains(task.id) &&
+                !task.needsShareFilenameDecision
+        }.sorted { first, second in
+            let a = WebDAVUploadSchedulingPolicy.priority(
+                for: tasks[first].fileSize
+            )
+            let b = WebDAVUploadSchedulingPolicy.priority(
+                for: tasks[second].fileSize
+            )
+            return a == b ? first < second : a < b
+        }
+        let candidates = Array(candidateIndices.prefix(limit).map {
+            tasks[$0]
+        })
 
         guard !candidates.isEmpty else { return false }
 
