@@ -83,6 +83,25 @@ final class WebDAVUploadPerformanceTests: XCTestCase {
         )
     }
 
+    func testSmallMediaGetsPreparedBeforeLargeVideo() {
+        let mib: Int64 = 1024 * 1024
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.priority(for: 4 * mib), 0
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.priority(for: 20 * mib), 1
+        )
+        XCTAssertEqual(
+            WebDAVUploadSchedulingPolicy.priority(for: 400 * mib), 2
+        )
+        let sizes: [Int64] = [400 * mib, 4 * mib, 20 * mib, 3 * mib]
+        let ordered = sizes.sorted {
+            WebDAVUploadSchedulingPolicy.priority(for: $0) <
+                WebDAVUploadSchedulingPolicy.priority(for: $1)
+        }
+        XCTAssertEqual(ordered.prefix(2), [4 * mib, 3 * mib])
+    }
+
     func testZeroLengthMediaNeverOccupiesUploadSlot() {
         XCTAssertFalse(
             WebDAVUploadSchedulingPolicy.canSchedule(
