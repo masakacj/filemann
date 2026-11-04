@@ -4,7 +4,7 @@ import UIKit
 
 /// A BG task is an *opportunity* to refill transfers, not a keep-alive.
 /// URLSession still owns the actual uploads while FileMann is suspended.
-/// Register handlers with SwiftUI Scene.backgroundTask in FileMannApp.
+/// Register both BGTaskScheduler handlers before app launch completes.
 @MainActor
 enum ArchiveBackgroundTaskScheduler {
     static let refreshIdentifier =
@@ -34,6 +34,44 @@ enum ArchiveBackgroundTaskScheduler {
         return "最近后台唤醒：\(at.formatted(date: .abbreviated, time: .shortened))（\(source)）"
     }
 
+    /// Explicit registration works on iOS 17/18 as well as newer releases.
+    /// The SwiftUI .processing BackgroundTask convenience isn't provided by
+    /// the version of SwiftUI bundled with our pinned Xcode 16.4 toolchain.
+    static func registerHandlers() {
+        let refreshRegistered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: refreshIdentifier,
+            using: nil
+        ) { task in
+            Task { @MainActor in
+                self.handle(task, reason: .refresh)
+            }
+        }
+        let processingRegistered = BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: processingIdentifier,
+            using: nil
+        ) { task in
+            Task { @MainActor in
+                self.handle(task, reason: .processing)
+            }
+        }
+        if !refreshRegistered || !processingRegistered {
+            NSLog("FileMann BGTaskScheduler handler registration failed")
+        }
+    }
+
+    private static func handle(_ task: BGTask, reason: WakeReason) {
+        let worker = Task { @MainActor in
+            await runOnce(reason: reason)
+        }
+        task.expirationHandler = {
+            worker.cancel()
+        }
+        Task { @MainActor in
+            let succeeded = await worker.value
+            task.setTaskCompleted(success: succeeded)
+        }
+    }
+
     static func attach(_ model: ArchiveViewModel) {
         liveModel = model
     }
@@ -43,9 +81,9 @@ enum ArchiveBackgroundTaskScheduler {
         case .available:
             return "系统后台刷新已允许；具体唤醒时机会由 iOS 决定"
         case .denied:
-            return "系统后台刷新已关闭；请到 iPhone 设置中允许后台 App 刷新"
+            return "后台 App 刷新不可用；检查系统开关或是否开启低电量模式"
         case .restricted:
-            return "系统限制了后台刷新（可能由低电量或设备管理策略限制）"
+            return "设备管理或家长控制限制了后台刷新，可能无法手动开启"
         @unknown default:
             return "暂时无法确定后台刷新状态"
         }
