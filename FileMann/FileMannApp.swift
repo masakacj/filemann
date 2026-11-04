@@ -13,7 +13,9 @@ final class FileMannAppDelegate: NSObject, UIApplicationDelegate {
                 // A background URLSession callback might be the only
                 // reason iOS has relaunched us without a visible scene.
                 Task { @MainActor in
-                    _ = await ArchiveBackgroundTaskScheduler.runOnce()
+                    _ = await ArchiveBackgroundTaskScheduler.runOnce(
+                        reason: .session
+                    )
                     completionHandler()
                 }
             }
@@ -63,12 +65,16 @@ struct FileMannApp: App {
         .backgroundTask(
             .appRefresh(ArchiveBackgroundTaskScheduler.refreshIdentifier)
         ) {
-            _ = await ArchiveBackgroundTaskScheduler.runOnce()
+            _ = await ArchiveBackgroundTaskScheduler.runOnce(
+                reason: .refresh
+            )
         }
         .backgroundTask(
             .processing(ArchiveBackgroundTaskScheduler.processingIdentifier)
         ) {
-            _ = await ArchiveBackgroundTaskScheduler.runOnce()
+            _ = await ArchiveBackgroundTaskScheduler.runOnce(
+                reason: .processing
+            )
         }
     }
 }
